@@ -1,0 +1,48 @@
+[package]
+name = "rac-rs-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "RAC-RS Launcher: install, play, configure and update the PC ports of Ratchet & Clank"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "rac_rs_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rac-rs-launcher"
+path = "src/main.rs"
+
+[dependencies]
+egui = { version = "0.37.0", default-features = false }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rfd = { version = "0.17.2", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+trash = "5.2.9"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+mslnk = "0.1.8"
+ureq = { version = "3.5.0", default-features = false, features = ["gzip", "native-tls"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell_Common", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(not(windows))'.dependencies]
+ureq = { version = "3.5.0", default-features = false, features = ["gzip", "rustls"] }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37.0", features = ["snapshot", "wgpu"] }

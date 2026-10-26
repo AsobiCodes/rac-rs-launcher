@@ -5,6 +5,12 @@ Each one keeps its own licence; the full texts are in each crate's repository an
 
 Fonts built in by egui (`default_fonts`): Ubuntu Light (Ubuntu Font Licence 1.0), Hack (MIT, Bitstream Vera licence), Noto Emoji (SIL Open Font Licence 1.1), emoji-icon-font (MIT, with OFL 1.1 for its Font Awesome glyphs).
 
+## OpenRAC mod format
+
+The Mods page reads script mods in the format of the game's mod loader OmniLoader, which follows the OpenRAC SDK 1.3 (https://github.com/OpenRAC/OpenRAC, MIT, Copyright (c) 2026 the OpenRAC contributors): the manifest fields, the settings types and OpenRAC's manifest file name `openrac-mod.json`. Written from the SDK's public documentation; no OpenRAC code is used.
+
+## Rust crates
+
 196 crates.
 
 | Crate | Version | Licence | Repository |

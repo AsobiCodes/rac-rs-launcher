@@ -31,6 +31,9 @@ fn entry_line(e: &LibEntry) -> (String, Option<Color32>) {
     if !games::is_installed(&dir, g) {
         return ("Not set up yet".into(), Some(theme::ORANGE));
     }
+    if e.backup {
+        return (format!("{} backup", g.title), Some(theme::BLUE));
+    }
     (format!("Version {}", games::local_version(&dir)), Some(theme::GREEN))
 }
 
@@ -58,6 +61,34 @@ fn nav_item(ui: &mut Ui, selected: bool, title: &str, sub: &str, dot: Option<Col
     resp.clicked()
 }
 
+/// A small "Support the project" link with a painted heart (a Ko-fi page). It opens the browser only on a click.
+pub fn support_link(ui: &mut Ui) {
+    let font = FontId::proportional(13.0);
+    let label = "Support the project";
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, theme::MUTED);
+    let size = Vec2::new(14.0 + 7.0 + galley.size().x, 18.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, label));
+    let hot = resp.hovered() || resp.has_focus();
+    let p = ui.painter();
+    let o = rect.left_top() + Vec2::new(0.0, (size.y - 12.0) / 2.0);
+    let heart = if hot { Color32::from_rgb(0xFF, 0x6B, 0x81) } else { Color32::from_rgb(0xE0, 0x5A, 0x6E) };
+    p.circle_filled(o + Vec2::new(4.3, 4.2), 3.7, heart);
+    p.circle_filled(o + Vec2::new(9.7, 4.2), 3.7, heart);
+    p.add(egui::Shape::convex_polygon(vec![o + Vec2::new(0.8, 5.6), o + Vec2::new(13.2, 5.6), o + Vec2::new(7.0, 12.0)], heart, egui::Stroke::NONE));
+    let col = if hot { theme::TEXT } else { theme::MUTED };
+    let text_pos = rect.left_center() + Vec2::new(21.0, 0.0);
+    p.galley(text_pos - Vec2::new(0.0, galley.size().y / 2.0), galley, col);
+    if hot {
+        let y = rect.bottom() - 1.0;
+        p.line_segment([egui::pos2(rect.left() + 21.0, y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, col));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.clicked() {
+        crate::platform::open_url(crate::play::SUPPORT_URL);
+    }
+}
+
 impl App {
     fn game_line(&self, g: &GameDef) -> (String, Option<Color32>) {
         if !g.supported {
@@ -66,13 +97,16 @@ impl App {
         if self.view == super::state::View::Run {
             return ("Setting up...".into(), Some(theme::BLUE));
         }
+        if self.view == super::state::View::Backup {
+            return ("Backing up...".into(), Some(theme::BLUE));
+        }
         if !self.info.installed {
             return ("Not installed".into(), Some(theme::MUTED));
         }
         if self.game_running() {
             return ("Running".into(), Some(theme::GREEN));
         }
-        let upd = matches!(self.update_state(), UpdateState::Available(_)) && !self.is_pinned();
+        let upd = matches!(self.update_state(), UpdateState::Available(_)) && !self.is_pinned() && !self.is_backup();
         let v = if self.info.local_version.is_empty() { "Installed".to_string() } else { format!("Version {}", self.info.local_version) };
         (v, Some(if upd { theme::ORANGE } else { theme::GREEN }))
     }
@@ -106,12 +140,14 @@ impl App {
             }
             for e in &installs {
                 let current = self.cur_id.as_deref() == Some(e.id.as_str());
-                let (mut line, dot) = if current { self.game_line(g) } else { entry_line(e) };
-                if installs.len() > 1 {
+                let (mut line, dot) = if current && !e.backup { self.game_line(g) } else { entry_line(e) };
+                if installs.len() > 1 && !e.backup {
                     line = format!("{line} - {}", folder_tail(&e.folder));
                 }
                 let selected = current && self.sel == Sel::Game(g.id);
-                if nav_item(ui, selected, g.title, &ellipsis(&line, 27), dot) {
+                // a backup's list name is long ("... v0.3.1 (backup)"); the line below says which game
+                let title = if e.backup { format!("Backup v{}", games::local_version(&e.path())) } else { e.title(g) };
+                if nav_item(ui, selected, &ellipsis(&title, 24), &ellipsis(&line, 27), dot) {
                     self.select_install(&e.id);
                 }
                 ui.add_space(2.0);
@@ -119,6 +155,8 @@ impl App {
         }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.label(theme::muted(format!("Launcher {LAUNCHER_VERSION}")));
+            ui.add_space(4.0);
+            support_link(ui);
             ui.add_space(6.0);
             if nav_item(ui, self.sel == Sel::Launcher, "Launcher", "Folder, shortcut, window", None) {
                 self.sel = Sel::Launcher;

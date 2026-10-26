@@ -49,7 +49,7 @@ impl Release {
     pub fn date(&self) -> String {
         self.published_at.clone().unwrap_or_default().chars().take(10).collect()
     }
-    /// "v0.3.5" -> "0.3.5".
+    /// "v0.4.0" -> "0.4.0".
     pub fn version(&self) -> String {
         self.tag_name.trim().trim_start_matches(['v', 'V']).to_string()
     }
@@ -369,13 +369,13 @@ mod tests {
 
     #[test]
     fn parses_the_github_shape() {
-        let j = r#"{"url":"x","tag_name":"v0.3.5","name":"n","body":"Fixed\r\nthings","assets":[
-            {"name":"rac-rs-0.3.5.zip","size":12,"browser_download_url":"https://github.com/a/b/releases/download/v0.3.5/rac-rs-0.3.5.zip","digest":"sha256:abc","id":5},
+        let j = r#"{"url":"x","tag_name":"v0.4.0","name":"n","body":"Fixed\r\nthings","assets":[
+            {"name":"rac-rs-0.4.0.zip","size":12,"browser_download_url":"https://github.com/a/b/releases/download/v0.4.0/rac-rs-0.4.0.zip","digest":"sha256:abc","id":5},
             {"name":"old.zip","size":1,"browser_download_url":"u","digest":null}]}"#;
         let r = parse_release(j).unwrap();
-        assert_eq!((r.version().as_str(), r.assets.len()), ("0.3.5", 2));
+        assert_eq!((r.version().as_str(), r.assets.len()), ("0.4.0", 2));
         assert_eq!(r.notes(), "Fixed\nthings");
-        assert_eq!(r.asset("rac-rs-0.3.5.zip").unwrap().size, 12);
+        assert_eq!(r.asset("rac-rs-0.4.0.zip").unwrap().size, 12);
         assert!(r.asset("old.zip").unwrap().digest.is_none());
         assert!(matches!(parse_release("{}"), Err(ReleaseError::Bad(_))));
         assert!(matches!(parse_release("not json"), Err(ReleaseError::Bad(_))));

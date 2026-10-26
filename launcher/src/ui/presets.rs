@@ -60,6 +60,9 @@ pub const TABLE: &[(&str, [&str; 3])] = &[
     ("vegetation", ["off", "moderate", "moderate"]),
     ("gi", ["off", "off", "off"]),
     ("waves", ["off", "on", "on"]),
+    ("fog", ["classic", "low", "high"]),
+    ("clouds", ["classic", "low", "high"]),
+    ("texfilter", ["smooth", "smooth", "smooth"]),
 ];
 
 fn default_of(key: &str) -> Option<&'static str> {
@@ -153,7 +156,7 @@ mod tests {
             let row = rows::ROWS.iter().find(|r| r.key == k).unwrap();
             assert!(matches!(row.group, Group::Graphics | Group::Enhanced), "{k}");
         }
-        for never in ["camera", "camfeel", "camspeed", "strafe", "lockon", "buyall", "lang", "renderer", "display", "debug", "culling", "keys", "pad"] {
+        for never in ["camera", "camfeel", "camspeed", "mousespeed", "strafe", "lockon", "buyall", "lang", "renderer", "display", "debug", "culling", "keys", "pad"] {
             assert!(!keys().contains(&never), "{never} must not be part of a preset");
         }
         let mut seen = keys();
@@ -165,33 +168,33 @@ mod tests {
     #[test]
     fn no_options_file_is_high_and_high_writes_nothing() {
         let o = Options::new();
-        assert_eq!(detect(&o, "0.3.5"), Preset::High);
+        assert_eq!(detect(&o, "0.4.0"), Preset::High);
         let mut p = Options::parse("version=1\nao=low\ndraw=low\nwater=classic\n");
-        apply(&mut p, "0.3.5", Preset::High);
+        apply(&mut p, "0.4.0", Preset::High);
         assert_eq!(p.to_text(), "version=1\n", "High removes the keys: the game's own defaults");
-        assert_eq!(detect(&p, "0.3.5"), Preset::High);
+        assert_eq!(detect(&p, "0.4.0"), Preset::High);
         // the same defaults written out are still High
-        assert_eq!(detect(&Options::parse("ao=high\nshadows=high\nwater=high\nhud=sharp\nwaves=on\n"), "0.3.5"), Preset::High);
+        assert_eq!(detect(&Options::parse("ao=high\nshadows=high\nwater=high\nhud=sharp\nwaves=on\n"), "0.4.0"), Preset::High);
     }
 
     #[test]
     fn low_and_medium_lower_the_costly_options_and_are_found_again() {
         let mut o = Options::new();
-        apply(&mut o, "0.3.5", Preset::Low);
+        apply(&mut o, "0.4.0", Preset::Low);
         assert_eq!(o.get("draw"), Some("low"));
         assert_eq!((o.get("smoothing"), o.get("hud"), o.get("waves"), o.get("vegetation")), (Some("off"), Some("original"), Some("off"), Some("off")));
         assert_eq!((o.get("ao"), o.get("water"), o.get("particles")), (Some("low"), Some("low"), Some("low")));
-        assert_eq!(detect(&o, "0.3.5"), Preset::Low);
-        apply(&mut o, "0.3.5", Preset::Medium);
+        assert_eq!(detect(&o, "0.4.0"), Preset::Low);
+        apply(&mut o, "0.4.0", Preset::Medium);
         assert_eq!((o.get("draw"), o.get("ao"), o.get("water")), (Some("low"), Some("medium"), Some("medium")));
         assert_eq!(o.get("smoothing"), None, "default On: no key");
-        assert_eq!(detect(&o, "0.3.5"), Preset::Medium);
-        apply(&mut o, "0.3.5", Preset::High);
-        assert_eq!(detect(&o, "0.3.5"), Preset::High);
+        assert_eq!(detect(&o, "0.4.0"), Preset::Medium);
+        apply(&mut o, "0.4.0", Preset::High);
+        assert_eq!(detect(&o, "0.4.0"), Preset::High);
         // each step is a real change
         let (mut l, mut m) = (Options::new(), Options::new());
-        apply(&mut l, "0.3.5", Preset::Low);
-        apply(&mut m, "0.3.5", Preset::Medium);
+        apply(&mut l, "0.4.0", Preset::Low);
+        apply(&mut m, "0.4.0", Preset::Medium);
         assert_ne!(l.to_text(), m.to_text());
         assert_ne!(m.to_text(), Options::new().to_text());
     }
@@ -200,29 +203,29 @@ mod tests {
     fn changing_one_value_afterwards_makes_it_custom_and_a_preset_never_touches_other_options() {
         let mut o = Options::parse("version=1\nlang=de\ncamera=classic\nstrafe=off\nlockon=on\ncamspeed=70\nrenderer=dx12\ndisplay=fullscreen\ndebug=on\nkeys=cross:KeyK\nfuture=1\n");
         let before = o.to_text();
-        apply(&mut o, "0.3.5", Preset::High);
+        apply(&mut o, "0.4.0", Preset::High);
         assert_eq!(o.to_text(), before, "High on an options file with only other options changes nothing");
-        apply(&mut o, "0.3.5", Preset::Low);
+        apply(&mut o, "0.4.0", Preset::Low);
         for line in before.lines() {
             assert!(o.to_text().lines().any(|l| l == line), "{line} lost");
         }
-        assert_eq!(detect(&o, "0.3.5"), Preset::Low);
+        assert_eq!(detect(&o, "0.4.0"), Preset::Low);
         // other options do not make it Custom
         o.set("renderer", Some("vulkan"));
         o.set("display", Some("windowed"));
-        assert_eq!(detect(&o, "0.3.5"), Preset::Low);
+        assert_eq!(detect(&o, "0.4.0"), Preset::Low);
         // one picture option does
         let ao = rows::ROWS.iter().find(|r| r.key == "ao").unwrap();
         rows::choose(&mut o, ao, 3);
-        assert_eq!(detect(&o, "0.3.5"), Preset::Custom);
-        assert!(!matches(&o, "0.3.5", Preset::Custom), "Custom is not a set of values");
+        assert_eq!(detect(&o, "0.4.0"), Preset::Custom);
+        assert!(!matches(&o, "0.4.0", Preset::Custom), "Custom is not a set of values");
         let mut c = o.clone();
-        apply(&mut c, "0.3.5", Preset::Custom);
+        apply(&mut c, "0.4.0", Preset::Custom);
         assert_eq!(c, o, "applying Custom does nothing");
         // Lighting is part of the presets
         let mut e = Options::new();
         e.set("lighting", Some("enhanced"));
-        assert_eq!(detect(&e, "0.3.5"), Preset::Custom);
+        assert_eq!(detect(&e, "0.4.0"), Preset::Custom);
     }
 
     #[test]
@@ -240,13 +243,14 @@ mod tests {
         apply(&mut o, "0.2.2", Preset::Medium);
         assert_eq!((o.get("water"), o.get("particles"), o.get("ao")), (Some("classic"), Some("classic"), Some("medium")));
         assert_eq!(detect(&o, "0.2.2"), Preset::Medium);
-        // 0.3.0 knows every level and every key
+        // 0.3.0 knows every level and every key except fog (0.4.0)
         let mut p = Options::new();
         apply(&mut p, "0.3.0", Preset::Medium);
         assert_eq!((p.get("water"), p.get("draw")), (Some("medium"), Some("low")));
         // the note
         assert!(version_note("0.2.2").unwrap().contains("0.2.2"));
-        assert!(version_note("0.3.5").is_none() && version_note("0.3.0").is_none());
+        assert_eq!(p.get("fog"), None, "fog is unknown to 0.3.0");
+        assert!(version_note("0.4.0").is_none() && version_note("0.3.0").is_some());
     }
 
     #[test]
@@ -263,6 +267,6 @@ mod tests {
         assert_eq!(effective("0.3.0", "particles", "low"), Some("low"));
         assert_eq!(effective("0.2.2", "waves", "off"), None, "unknown key");
         assert_eq!(effective("0.2.2", "ao", "low"), Some("low"), "rows without per-value gating are untouched");
-        assert_eq!(effective("0.3.5", "draw", "medium"), Some("medium"));
+        assert_eq!(effective("0.4.0", "draw", "medium"), Some("medium"));
     }
 }

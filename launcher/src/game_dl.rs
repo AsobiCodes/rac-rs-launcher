@@ -373,7 +373,7 @@ mod tests {
                 rel("v0.2.1", false, false, Some("rac-rs-0.2.1.zip"), true),
                 rel("v0.2.0", false, false, None, false),
                 rel("v0.1.3", false, false, Some("rac-rs-0.1.3.zip"), true),
-                rel("v0.3.5", true, false, Some("rac-rs-0.3.5.zip"), true),
+                rel("v0.4.0", true, false, Some("rac-rs-0.4.0.zip"), true),
                 rel("v0.2.3", false, false, Some("rac-rs-0.2.3.zip"), false),
             ]
             .join(",")

@@ -22,11 +22,26 @@ pub struct LibEntry {
     /// The user put this install on an older game version: no update nag (a plain "Update to <newest>" button stays).
     #[serde(default)]
     pub pinned: bool,
+    /// A backup made before an update (`backup.rs`): always pinned, never updated, can be deleted from the Library.
+    #[serde(default)]
+    pub backup: bool,
+    /// The name shown for a backup ("Ratchet & Clank v0.3.1 (backup)"); empty = the game's title.
+    #[serde(default)]
+    pub name: String,
 }
 
 impl LibEntry {
     pub fn path(&self) -> PathBuf {
         PathBuf::from(&self.folder)
+    }
+
+    /// What the sidebar and the Library call it.
+    pub fn title(&self, game: &GameDef) -> String {
+        if self.name.is_empty() {
+            game.title.to_string()
+        } else {
+            self.name.clone()
+        }
     }
 }
 
@@ -208,7 +223,17 @@ impl Library {
         if let Some(e) = self.find_folder(folder) {
             return e.clone();
         }
-        let e = LibEntry { id: self.new_id(game.id), game: game.id.to_string(), folder: folder.to_string_lossy().to_string(), added: today(), pinned: false };
+        let e = LibEntry { id: self.new_id(game.id), game: game.id.to_string(), folder: folder.to_string_lossy().to_string(), added: today(), pinned: false, backup: false, name: String::new() };
+        self.entries.push(e.clone());
+        e
+    }
+
+    /// Lists a finished backup folder: pinned to its version, flagged as a backup, named. The folder is never listed twice.
+    pub fn add_backup(&mut self, game: &GameDef, folder: &Path, name: &str) -> LibEntry {
+        if let Some(e) = self.find_folder(folder) {
+            return e.clone();
+        }
+        let e = LibEntry { id: self.new_id(game.id), game: game.id.to_string(), folder: folder.to_string_lossy().to_string(), added: today(), pinned: true, backup: true, name: name.to_string() };
         self.entries.push(e.clone());
         e
     }
@@ -314,7 +339,7 @@ mod tests {
         let d = scratch("add");
         let mut lib = Library::load(&d);
         let inst = scratch("add_inst");
-        make_install(&inst, "0.3.5");
+        make_install(&inst, "0.4.0");
         let e = lib.add_existing(&inst).unwrap();
         assert_eq!((e.game.as_str(), e.id.as_str()), ("rac1", "rac1"));
         // same folder, other spelling
@@ -328,7 +353,7 @@ mod tests {
         assert!(lib.add_existing(&d.join("nothing")).unwrap_err().contains("does not exist"));
         assert!(lib.add_existing(&d).unwrap_err().contains("not a RAC-RS game folder"));
         let unbuilt = scratch("add_unbuilt");
-        std::fs::write(unbuilt.join("VERSION"), "0.3.5\n").unwrap();
+        std::fs::write(unbuilt.join("VERSION"), "0.4.0\n").unwrap();
         std::fs::write(unbuilt.join("setup.ps1"), "x").unwrap();
         assert!(lib.add_existing(&unbuilt).unwrap_err().contains("not set up"));
         assert_eq!(lib.entries.len(), 2);
@@ -339,7 +364,7 @@ mod tests {
         let d = scratch("rm");
         let mut lib = Library::load(&d);
         let inst = scratch("rm_inst");
-        make_install(&inst, "0.3.5");
+        make_install(&inst, "0.4.0");
         let e = lib.add_existing(&inst).unwrap();
         assert!(lib.remove(&e.id));
         assert!(!lib.remove(&e.id));
@@ -353,10 +378,33 @@ mod tests {
         let mut lib = Library::load(&d);
         assert!(lib.auto_add(&d).is_none(), "not a game folder");
         let inst = scratch("auto_inst");
-        make_install(&inst, "0.3.5");
+        make_install(&inst, "0.4.0");
         assert!(lib.auto_add(&inst).is_some());
         assert!(lib.auto_add(&inst).is_none());
         assert_eq!(lib.entries.len(), 1);
+    }
+
+    #[test]
+    fn a_backup_entry_is_pinned_named_flagged_and_survives_the_file() {
+        let d = scratch("bakentry");
+        let mut lib = Library::load(&d);
+        let g = games::game_by_id("rac1").unwrap();
+        let main = lib.add(g, Path::new("D:\\Games\\RAC1"));
+        assert!(!main.backup && !main.pinned && main.title(g) == "Ratchet & Clank");
+        let b = lib.add_backup(g, Path::new("D:\\Games\\RAC1 (backup v0.3.1)"), "RAC1 v0.3.1 (backup)");
+        assert!(b.backup && b.pinned);
+        assert_eq!(b.title(g), "RAC1 v0.3.1 (backup)");
+        assert_ne!(b.id, main.id);
+        // the same folder again gives the same entry
+        assert_eq!(lib.add_backup(g, Path::new("d:/games/rac1 (backup v0.3.1)"), "other").id, b.id);
+        lib.save().unwrap();
+        let again = Library::load(&d);
+        assert_eq!(again.entries, lib.entries);
+        assert!(again.get(&b.id).unwrap().backup);
+        // an old library.json without the new fields still loads
+        std::fs::write(d.join(LIBRARY_FILE), r#"{"installs":[{"id":"rac1","game":"rac1","folder":"X","added":"2026-10-01","pinned":true}]}"#).unwrap();
+        let old = Library::load(&d);
+        assert!(!old.entries[0].backup && old.entries[0].name.is_empty() && old.entries[0].pinned);
     }
 
     #[test]

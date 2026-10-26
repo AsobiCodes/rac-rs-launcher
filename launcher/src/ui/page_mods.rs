@@ -1,10 +1,12 @@
 //! The Mods tab: list of installed mods (switch on/off, priority, details, remove), adding a mod from a .zip or folder or PCSX2's textures
 //! folder (with a preview and progress).
+use super::page_mods_script::{self, Changes, PanelState};
 use super::state::{App, Purpose};
 use super::theme::{self, Icon};
 use crate::gating;
 use crate::mods::detect::Layout;
 use crate::mods::import::{self, Candidate, ImportState, ReadState, Source};
+use crate::mods::settings::SettingsFile;
 use crate::mods::{ModEntry, ModStore};
 use crate::platform;
 use egui::{RichText, ScrollArea, Ui};
@@ -31,6 +33,11 @@ pub struct ModsUi {
     pub selected: Option<String>,
     pub confirm_remove: Option<String>,
     pub add: AddState,
+    /// `mods\settings.json`: the values of the script mods' settings.
+    pub settings: SettingsFile,
+    /// The script mod whose settings panel is open.
+    pub settings_open: Option<String>,
+    pub panel: PanelState,
 }
 
 impl ModsUi {
@@ -40,9 +47,15 @@ impl ModsUi {
             Some(a) => ModStore::load_with(dir, a),
             None => ModStore::load(dir),
         };
+        self.settings = SettingsFile::load(&dir.join("settings.json"));
         if let Some(s) = &self.selected {
             if self.store.get(s).is_none() {
                 self.selected = None;
+            }
+        }
+        if let Some(s) = &self.settings_open {
+            if self.store.get(s).and_then(|e| e.script.as_ref()).is_none() {
+                self.settings_open = None;
             }
         }
     }
@@ -64,6 +77,8 @@ fn layout_text(l: &Layout) -> &'static str {
 fn kind_text(kind: &str) -> &str {
     match kind {
         "textures" => "Texture pack",
+        "script" => "Script mod",
+        "native" => "Native mod",
         other => other,
     }
 }
@@ -141,7 +156,7 @@ impl App {
 
     pub fn show_mods(&mut self, ui: &mut Ui) {
         ui.label(theme::bold("Mods", 22.0));
-        ui.label(theme::muted("Texture packs made for PCSX2 work here too. Changes apply the next time the game starts."));
+        ui.label(theme::muted("Script mods (like Arsenal Mastery) and texture packs, including ones made for PCSX2. Changes apply the next time the game starts."));
         ui.add_space(4.0);
         if !self.profile_id.is_empty() {
             self.profile_header(ui);
@@ -150,8 +165,8 @@ impl App {
         if let Some(n) = gating::needs_text(&self.info.local_version, gating::TEXTURE_PACKS) {
             theme::card_colored(ui, theme::ORANGE, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("Texture packs take effect once the game is updated.").color(theme::ORANGE).size(14.0));
-                ui.label(theme::muted(format!("{n} You can already add and sort packs here; they are used as soon as the game knows them.")));
+                ui.label(RichText::new("Mods and texture packs take effect once the game is updated.").color(theme::ORANGE).size(14.0));
+                ui.label(theme::muted(format!("{n} You can already add and sort them here; they are used as soon as the game knows them.")));
             });
             ui.add_space(4.0);
         }
@@ -168,15 +183,28 @@ impl App {
             return;
         }
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_enabled_ui(!running, |ui| {
-                let ids: Vec<String> = self.mods_ui.store.display_order().iter().map(|e| e.id.clone()).collect();
-                let enabled_count = self.mods_ui.store.active.len();
-                for id in ids {
-                    self.mod_row(ui, &id, enabled_count);
-                }
-            });
+            ui.add_enabled_ui(!running, |ui| self.mod_lists(ui));
             ui.add_space(8.0);
         });
+    }
+
+    /// The mod rows: script mods first, then texture packs, each list under a heading when both kinds are installed.
+    fn mod_lists(&mut self, ui: &mut Ui) {
+        let (scripts, packs): (Vec<String>, Vec<String>) = {
+            let order: Vec<&ModEntry> = self.mods_ui.store.display_order();
+            let (a, b): (Vec<&ModEntry>, Vec<&ModEntry>) = order.into_iter().partition(|e| e.is_script());
+            (a.iter().map(|e| e.id.clone()).collect(), b.iter().map(|e| e.id.clone()).collect())
+        };
+        let both = !scripts.is_empty() && !packs.is_empty();
+        for (title, ids) in [("Script mods", scripts), ("Texture packs", packs)] {
+            if both {
+                ui.add_space(2.0);
+                ui.label(theme::bold(title, 16.0));
+            }
+            for id in ids {
+                self.mod_row(ui, &id);
+            }
+        }
     }
 
     fn mods_empty(&mut self, ui: &mut Ui) {
@@ -185,6 +213,7 @@ impl App {
             ui.label(theme::bold("No mods yet", 18.0));
             ui.label(theme::muted("Click \"Add .zip\" or \"Add folder\" to add a texture pack, or \"Import from PCSX2\" if you already use texture packs there."));
             ui.label(theme::muted("A texture pack is a folder called \"replacements\" with picture files in it, as PCSX2 uses."));
+            ui.label(theme::muted("A script mod is a folder with an omni-mod.json in it: put the folder into the mods folder (\"Open mods folder\") and it shows up here."));
         });
     }
 
@@ -329,14 +358,22 @@ impl App {
         }
     }
 
-    fn mod_row(&mut self, ui: &mut Ui, id: &str, enabled_count: usize) {
+    fn mod_row(&mut self, ui: &mut Ui, id: &str) {
         let Some(e) = self.mods_ui.store.get(id).cloned() else { return };
         let on = self.mods_ui.store.is_enabled(id);
         // switched on per mod, but its master tick is off: the game does not load it (shown dimmed, the switch stays on)
         let held = on && !self.mods_ui.store.is_loaded(id);
         let block = e.cannot_enable("rac1");
         let warn = e.serial_warning(self.disc_serial());
-        let pos = self.mods_ui.store.active.iter().position(|a| a == id);
+        let group = self.mods_ui.store.group_of(id);
+        let (pos, enabled_count) = (group.iter().position(|a| a.as_str() == id), group.len());
+        let has_settings = e.script.as_ref().is_some_and(|m| m.has_settings());
+        let settings_open = has_settings && self.mods_ui.settings_open.as_deref() == Some(id);
+        let mut settings_toggle = false;
+        let mut changes: Changes = Vec::new();
+        let given = e.script.as_ref().map(|m| self.mods_ui.settings.mod_values(&m.id)).unwrap_or_default();
+        let (newer, broken) = (self.mods_ui.settings.newer, self.mods_ui.settings.broken.clone());
+        let panel = &mut self.mods_ui.panel;
         let selected = self.mods_ui.selected.as_deref() == Some(id);
         let edge = if on && !held { theme::ORANGE } else { theme::LINE };
         let mut toggle = false;
@@ -353,9 +390,15 @@ impl App {
                 if held {
                     ui.set_opacity(0.6);
                 }
-                ui.horizontal(|ui| {
+                let btn = RowButtons { has_settings, settings_open, selected, can_down: on && pos.map(|p| p + 1 < enabled_count).unwrap_or(false), can_up: on && pos.map(|p| p > 0).unwrap_or(false), on, script: e.is_script() };
+                // the buttons sit to the right of the text when there is room, else under it (a long subtitle must not run under them)
+                let reserve = btn.width();
+                let side_by_side = ui.available_width() - 50.0 - reserve >= 320.0;
+                let mut clicks = RowClicks::default();
+                ui.horizontal_top(|ui| {
                     toggle = theme::switch(ui, on, block.is_none() || on, &format!("Use {}", e.name()));
-                    ui.vertical(|ui| {
+                    let text_w = if side_by_side { ui.available_width() - reserve } else { ui.available_width() };
+                    ui.allocate_ui_with_layout(egui::vec2(text_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(theme::bold(e.name(), 16.0));
                             if let Ok(i) = &e.info {
@@ -366,28 +409,47 @@ impl App {
                         if let Some(w) = warn.as_ref().or(block.as_ref()) {
                             ui.label(RichText::new(w).color(theme::ORANGE).size(13.0));
                         }
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        remove = theme::button(ui, "Remove");
-                        details = theme::button(ui, if selected { "Hide details" } else { "Details" });
-                        if on {
-                            if theme::icon_button(ui, Icon::Down, pos.map(|p| p + 1 < enabled_count).unwrap_or(false), "Lower priority") {
-                                mv = 1;
-                            }
-                            if theme::icon_button(ui, Icon::Up, pos.map(|p| p > 0).unwrap_or(false), "Higher priority: wins when two packs change the same picture") {
-                                mv = -1;
-                            }
+                        if !side_by_side {
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| clicks = btn.draw(ui, false));
                         }
                     });
+                    if side_by_side {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| clicks = btn.draw(ui, true));
+                    }
                 });
+                (mv, details, remove, settings_toggle) = (clicks.mv, clicks.details, clicks.remove, clicks.settings);
+                if settings_open {
+                    ui.separator();
+                    if let Some(m) = &e.script {
+                        settings_notes(ui, newer, broken.as_deref());
+                        changes = page_mods_script::panel(ui, m, &given, panel, newer);
+                    }
+                }
                 if selected {
                     ui.separator();
                     mod_details(ui, &e);
                 }
             });
+        self.script_settings_actions(&e, settings_toggle, changes);
         self.mod_row_actions(id, toggle, mv, details, remove, selected);
         if self.mods_ui.confirm_remove.as_deref() == Some(id) {
             self.mod_confirm_remove(ui, id, &e);
+        }
+    }
+
+    /// The Settings button, and the values the panel changed (written to settings.json now; the game reads them at its next start).
+    fn script_settings_actions(&mut self, e: &ModEntry, toggle: bool, changes: Changes) {
+        if toggle {
+            self.mods_ui.settings_open = if self.mods_ui.settings_open.as_deref() == Some(e.id.as_str()) { None } else { Some(e.id.clone()) };
+            self.mods_ui.panel = PanelState::default();
+        }
+        let Some(m) = &e.script else { return };
+        if changes.is_empty() {
+            return;
+        }
+        if let Err(why) = self.mods_ui.settings.apply(&m.id, &changes) {
+            self.toast(format!("The settings of \"{}\" could not be saved: {why}", m.name), true);
         }
     }
 
@@ -482,6 +544,25 @@ fn count_text(n: u64) -> String {
     out
 }
 
+/// `text` cut at a word near `max` characters, with "..." (the details show it whole).
+fn short_text(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max).collect();
+    let cut = cut.rsplit_once(' ').map(|(a, _)| a).unwrap_or(&cut);
+    format!("{}...", cut.trim_end_matches(|c: char| c == ',' || c == '.' || c == ';'))
+}
+
+/// Notes above a settings panel: a file the launcher must not write, or one it will replace.
+fn settings_notes(ui: &mut Ui, newer: bool, broken: Option<&str>) {
+    if newer {
+        ui.label(RichText::new("settings.json was written by a newer version of the game. It is shown here but cannot be changed from this launcher.").color(theme::ORANGE).size(13.0));
+    } else if let Some(why) = broken {
+        ui.label(RichText::new(format!("settings.json is damaged ({why}). The defaults are shown; the first change you make saves a new file and keeps the old one as settings.json.broken.")).color(theme::ORANGE).size(13.0));
+    }
+}
+
 fn mod_subtitle(e: &ModEntry) -> String {
     match &e.info {
         Ok(i) => {
@@ -493,7 +574,7 @@ fn mod_subtitle(e: &ModEntry) -> String {
                 parts.push(format!("v{}", i.version));
             }
             if !i.description.is_empty() {
-                parts.push(i.description.lines().next().unwrap_or("").to_string());
+                parts.push(short_text(i.description.lines().next().unwrap_or(""), 110));
             }
             parts.join("  -  ")
         }
@@ -502,7 +583,12 @@ fn mod_subtitle(e: &ModEntry) -> String {
 }
 
 fn mod_details(ui: &mut Ui, e: &ModEntry) {
-    if let Ok(i) = &e.info {
+    if let (Ok(i), Some(m)) = (&e.info, &e.script) {
+        ui.label(&i.description);
+        let games: Vec<String> = m.games.iter().map(|(g, v)| format!("{} ({})", g, v.join(", "))).collect();
+        let folder = e.dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        ui.label(theme::muted(format!("Made for: {}   Id: {}   Folder name: {}", games.join("; "), m.id, folder)));
+    } else if let Ok(i) = &e.info {
         // the first line is already under the name; the details show a longer text only
         if i.description.lines().count() > 1 {
             ui.label(&i.description);
@@ -513,5 +599,76 @@ fn mod_details(ui: &mut Ui, e: &ModEntry) {
     ui.label(theme::muted(format!("Location: {}", e.dir.display())));
     if theme::button(ui, "Open its folder") {
         platform::open_path(&e.dir);
+    }
+}
+
+/// What the buttons of a mod row show (the row draws them to the right of its text, or under it when the window is narrow).
+struct RowButtons {
+    has_settings: bool,
+    settings_open: bool,
+    selected: bool,
+    on: bool,
+    can_down: bool,
+    can_up: bool,
+    script: bool,
+}
+
+#[derive(Default)]
+struct RowClicks {
+    mv: i32,
+    details: bool,
+    remove: bool,
+    settings: bool,
+}
+
+impl RowButtons {
+    /// A little more than the buttons need, in points.
+    fn width(&self) -> f32 {
+        let mut w = 8.0 + 86.0 + 105.0; // Remove, Details / Hide details
+        if self.has_settings {
+            w += 8.0 + 120.0;
+        }
+        if self.on {
+            w += 2.0 * (8.0 + 30.0);
+        }
+        w + 12.0
+    }
+
+    /// Draws up, down, settings, details, remove (in this order on screen: `right_to_left` = the layout is right to left, so reversed).
+    fn draw(&self, ui: &mut Ui, right_to_left: bool) -> RowClicks {
+        #[derive(Clone, Copy)]
+        enum B {
+            Up,
+            Down,
+            Settings,
+            Details,
+            Remove,
+        }
+        let mut order = vec![B::Up, B::Down, B::Settings, B::Details, B::Remove];
+        if right_to_left {
+            order.reverse();
+        }
+        let mut c = RowClicks::default();
+        for b in order {
+            match b {
+                B::Up | B::Down if !self.on => {}
+                B::Up => {
+                    let tip = if self.script { "Earlier in the list: the game loads it first" } else { "Higher priority: wins when two packs change the same picture" };
+                    if theme::icon_button(ui, Icon::Up, self.can_up, tip) {
+                        c.mv = -1;
+                    }
+                }
+                B::Down => {
+                    if theme::icon_button(ui, Icon::Down, self.can_down, "Lower priority") {
+                        c.mv = 1;
+                    }
+                }
+                B::Settings if self.has_settings => c.settings = theme::button(ui, if self.settings_open { "Hide settings" } else { "Mod settings" }),
+                B::Settings => {}
+                B::Details => c.details = theme::button(ui, if self.selected { "Hide details" } else { "Details" }),
+                B::Remove => c.remove = theme::button(ui, "Remove"),
+            }
+        }
+        c
     }
 }

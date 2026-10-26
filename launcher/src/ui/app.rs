@@ -83,9 +83,14 @@ impl LauncherApp {
         let mut quit = false;
         egui::Modal::new(egui::Id::unique("quit")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(theme::bold("Setup is still running", 20.0));
+            let backing = self.app.backup_running();
+            ui.label(theme::bold(if backing { "A backup is still running" } else { "Setup is still running" }, 20.0));
             ui.add_space(6.0);
-            ui.label(theme::muted("If you close the launcher now, the setup stops. You can start it again later and it continues."));
+            ui.label(theme::muted(if backing {
+                "If you close the launcher now, the backup is stopped and removed. The update has not started and nothing was changed."
+            } else {
+                "If you close the launcher now, the setup stops. You can start it again later and it continues."
+            }));
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 if theme::button(ui, "Keep running") {

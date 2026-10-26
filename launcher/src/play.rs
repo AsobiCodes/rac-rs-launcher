@@ -91,6 +91,8 @@ pub fn open_logs(root: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub const LOG_HINT: &str = "Reporting a problem? Attach log.txt from the log folder (log.prev.txt if you already restarted the game).";
+/// Where players can support the project (a link in the sidebar and on the Launcher page; opened only on a click).
+pub const SUPPORT_URL: &str = "https://ko-fi.com/asobicodes";
 pub const ISSUES_URL: &str = "https://github.com/AsobiCodes/rac-rs/issues";
 
 #[cfg(test)]

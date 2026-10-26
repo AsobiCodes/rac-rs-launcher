@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 /// Keys in the order the game writes them (the launcher's `renderer` after `display`).
 pub const KEYS: &[&str] = &[
-    "lang", "camera", "camfeel", "strafe", "buyall", "lockon", "camspeed", "lighting", "ao", "shadows", "display", "renderer", "water", "particles", "sunrays",
-    "smoothing", "vegetation", "culling", "gi", "waves", "draw", "hud", "debug",
+    "lang", "camera", "camfeel", "strafe", "buyall", "lockon", "camspeed", "mousespeed", "lighting", "ao", "shadows", "display", "renderer", "water", "particles", "sunrays",
+    "smoothing", "vegetation", "culling", "gi", "waves", "draw", "fog", "clouds", "texfilter", "hud", "intro", "debug",
 ];
 
 pub const LEVELS: [&str; 4] = ["off", "low", "medium", "high"];
@@ -19,6 +19,8 @@ pub const LEVELS_CLASSIC: [&str; 4] = ["classic", "low", "medium", "high"];
 pub const DRAW: [&str; 3] = ["low", "medium", "high"];
 pub const LOCKON: [&str; 3] = ["auto", "on", "off"];
 pub const VEGETATION: [&str; 3] = ["off", "moderate", "lush"];
+/// `intro=play` (the retail logos and movie, the default) or `intro=skip` (straight to the title screen).
+pub const INTRO: [&str; 2] = ["play", "skip"];
 pub const LANGS: [&str; 5] = ["en", "fr", "de", "es", "it"];
 pub const CAMSPEED_MIN: u32 = 10;
 pub const CAMSPEED_MAX: u32 = 200;
@@ -55,7 +57,7 @@ fn one_of(v: &str, names: &[&str]) -> Option<String> {
     names.iter().find(|n| **n == v).map(|n| n.to_string())
 }
 
-/// camera speed in percent: snapped to the grid of 10 inside 10..=200.
+/// camera speed and mouse speed in percent: snapped to the grid of 10 inside 10..=200.
 pub fn snap_camspeed(p: u32) -> u32 {
     ((p.min(255) + 5) / 10 * 10).clamp(CAMSPEED_MIN, CAMSPEED_MAX)
 }
@@ -68,19 +70,21 @@ pub fn canon(key: &str, v: &str) -> Option<String> {
         "camfeel" => two(v, "smooth", "static"),
         "strafe" | "buyall" | "smoothing" | "culling" | "waves" | "debug" => two(v, "on", "off"),
         "lockon" => one_of(v, &LOCKON),
-        "camspeed" => v.trim().trim_end_matches('%').trim().parse::<u32>().ok().map(|n| snap_camspeed(n).to_string()),
+        "camspeed" | "mousespeed" => v.trim().trim_end_matches('%').trim().parse::<u32>().ok().map(|n| snap_camspeed(n).to_string()),
         "lighting" => match v.trim().to_ascii_lowercase().as_str() {
             "classic" | "original" => Some("classic".into()),
             "enhanced" | "modern" | "experimental" => Some("enhanced".into()),
             _ => None,
         },
         "ao" | "shadows" | "sunrays" | "gi" => level(v, &LEVELS),
-        "water" | "particles" => level(v, &LEVELS_CLASSIC),
+        "water" | "particles" | "fog" | "clouds" => level(v, &LEVELS_CLASSIC),
         "display" => two(v, "fullscreen", "windowed"),
         "renderer" => one_of(v, &["vulkan", "dx12"]),
         "vegetation" => one_of(v, &VEGETATION),
         "draw" => one_of(v, &DRAW),
         "hud" => two(v, "sharp", "original"),
+        "intro" => one_of(v, &INTRO),
+        "texfilter" => two(v, "smooth", "classic"),
         _ => None,
     }
 }
@@ -219,7 +223,7 @@ mod tests {
 
     #[test]
     fn round_trip_keeps_unknown_keys_and_order() {
-        let text = "version=1\nlang=de\ncamera=modern\ncamfeel=static\nstrafe=off\nlockon=off\ncamspeed=70\nlighting=enhanced\nao=low\nshadows=medium\ndisplay=fullscreen\nwater=classic\nparticles=high\nsunrays=off\nsmoothing=off\nvegetation=lush\ngi=medium\nwaves=off\ndraw=high\nhud=original\nfuture_thing=7\nkeys=cross:KeyK\n";
+        let text = "version=1\nlang=de\ncamera=modern\ncamfeel=static\nstrafe=off\nlockon=off\ncamspeed=70\nmousespeed=120\nlighting=enhanced\nao=low\nshadows=medium\ndisplay=fullscreen\nwater=classic\nparticles=high\nsunrays=off\nsmoothing=off\nvegetation=lush\ngi=medium\nwaves=off\ndraw=high\nhud=original\nfuture_thing=7\nkeys=cross:KeyK\n";
         let o = Options::parse(text);
         assert_eq!(o.to_text(), text);
         assert_eq!(o.extra_keys().collect::<Vec<_>>(), vec!["future_thing", "keys"]);
@@ -256,6 +260,7 @@ mod tests {
         assert_eq!(Options::parse("camspeed=73%\n").to_text(), "version=1\ncamspeed=70\n");
         assert_eq!(Options::parse("camspeed=3\n").to_text(), "version=1\ncamspeed=10\n");
         assert_eq!(Options::parse("camspeed=999\n").to_text(), "version=1\ncamspeed=200\n");
+        assert_eq!(Options::parse("mousespeed=86%\ncamspeed=150\n").to_text(), "version=1\ncamspeed=150\nmousespeed=90\n");
         assert_eq!(Options::parse("debug=on\n").to_text(), "version=1\ndebug=on\n");
         assert_eq!(Options::parse("debug=off\n").to_text(), "version=1\n");
     }
@@ -270,6 +275,19 @@ mod tests {
         assert_eq!(o.to_text(), "version=1\nzzz=1\n");
         o.set("renderer", Some("opengl"));
         assert_eq!(o.get("renderer"), None, "unknown value: not stored");
+    }
+
+    #[test]
+    fn intro_key_is_play_or_skip_and_unknown_lines_survive() {
+        let o = Options::parse("version=1\nintro=SKIP\nkeys=r2:Period\nfoo=1\n");
+        assert_eq!(o.get("intro"), Some("skip"));
+        assert_eq!(o.to_text(), "version=1\nintro=skip\nkeys=r2:Period\nfoo=1\n");
+        let mut o = Options::parse("version=1\nhud=original\ndebug=on\nkeys=r2:Period\n");
+        o.set("intro", Some("play"));
+        assert_eq!(o.to_text(), "version=1\nhud=original\nintro=play\ndebug=on\nkeys=r2:Period\n");
+        o.set("intro", Some("maybe"));
+        assert_eq!(o.get("intro"), None, "unknown value: dropped");
+        assert_eq!(Options::parse("intro=banana\n").to_text(), "version=1\n");
     }
 
     #[test]

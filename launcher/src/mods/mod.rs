@@ -2,10 +2,15 @@
 //!   mods\active.txt            enabled mod ids, one per line, highest priority first; `#` lines and blank lines are ignored
 //!   mods\<id>\mod.json         {"format":1,"id","name","author","version","description","game":"rac1","kind":"textures","serials":[...],"source":"pcsx2"}
 //!   mods\<id>\textures\...     for kind "textures": the contents of a PCSX2 pack's replacements folder, subfolders kept
+//!   mods\<folder>\omni-mod.json   a script or native mod (format 2); active.txt lists the manifest `id` (the folder name may differ), settings.json is keyed by it, too
+//!   mods\settings.json         {"format":1,"mods":{"<mod id>":{"<key>": value}}}: the values of script mods' settings (see `settings`)
 //! Unknown kinds (or a newer format) are listed but cannot be enabled ("needs a newer version").
 pub mod active;
 pub mod detect;
 pub mod import;
+pub mod keys;
+pub mod script;
+pub mod settings;
 
 use crate::platform;
 pub use active::{Master, Masters};
@@ -16,7 +21,7 @@ use std::path::{Path, PathBuf};
 pub const OTHER_REGION_NOTE: &str = "Most world textures still match; menus, HUD and text may stay original.";
 
 /// The kinds this launcher can enable.
-pub const KNOWN_KINDS: &[&str] = &["textures"];
+pub const KNOWN_KINDS: &[&str] = &["textures", "script", "native"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModInfo {
@@ -80,6 +85,10 @@ pub struct ModEntry {
     pub id: String,
     pub dir: PathBuf,
     pub info: Result<ModInfo, String>,
+    /// A script or native mod: what its omni-mod.json says (`info` is made from it, kind "script" or "native").
+    pub script: Option<script::ScriptMod>,
+    /// The description file that was read: `mod.json` or `omni-mod.json`.
+    pub manifest_file: &'static str,
 }
 
 impl ModEntry {
@@ -90,13 +99,19 @@ impl ModEntry {
         }
     }
 
+    /// A script or native mod (it has an omni-mod.json, readable or not).
+    pub fn is_script(&self) -> bool {
+        self.manifest_file == script::FILE
+    }
+
     /// Why this mod cannot be switched on (None = it can).
     pub fn cannot_enable(&self, game_id: &str) -> Option<String> {
         match &self.info {
+            Err(e) if self.manifest_file == script::FILE => Some(format!("{} has a problem: {e}", script::FILE)),
             Err(e) => Some(format!("mod.json could not be read ({e})")),
             Ok(i) if i.format != 1 => Some("needs a newer version of the launcher".to_string()),
             Ok(i) if !KNOWN_KINDS.contains(&i.kind.as_str()) => Some("needs a newer version".to_string()),
-            Ok(i) if i.game != game_id => Some(format!("made for another game ({})", i.game)),
+            Ok(i) if i.game != game_id && !self.script.as_ref().is_some_and(|m| m.games.contains_key(game_id)) => Some(format!("made for another game ({})", i.game)),
             Ok(_) => None,
         }
     }
@@ -129,6 +144,43 @@ pub struct ModStore {
 fn master_in(entries: &[ModEntry], id: &str) -> Option<Master> {
     let info = entries.iter().find(|e| e.id == id)?.info.as_ref().ok()?;
     Some(Master::of_kind(&info.kind))
+}
+
+/// The entry of a folder with an omni-mod.json (None = a format 1 data pack, which is not a script mod and is left to mod.json).
+/// The entry id is the manifest's `id` (what active.txt lists and what keys settings.json; the folder name may differ). A broken manifest,
+/// or a manifest id another folder already has, shows the problem under the folder name and cannot be switched on.
+fn script_entry(folder: &str, dir: &Path, file: &Path, seen: &[ModEntry]) -> Option<ModEntry> {
+    let text = match std::fs::read(file) {
+        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(e) => return Some(bad_script(folder, dir, e.to_string())),
+    };
+    match script::parse(&text) {
+        script::Parsed::DataPack => None,
+        script::Parsed::Bad(why) => Some(bad_script(folder, dir, why)),
+        script::Parsed::Mod(m) => {
+            if seen.iter().any(|e| e.id == m.id) {
+                return Some(bad_script(folder, dir, format!("another mod folder already has the id \"{}\"", m.id)));
+            }
+            let game = if m.games.contains_key("rac1") { "rac1".to_string() } else { m.games.keys().next().cloned().unwrap_or_default() };
+            let info = ModInfo {
+                format: 1,
+                id: m.id.clone(),
+                name: m.name.clone(),
+                author: m.author.clone(),
+                version: m.version.clone(),
+                description: m.description.clone(),
+                game,
+                kind: m.kind.clone(),
+                serials: Vec::new(),
+                source: String::new(),
+            };
+            Some(ModEntry { id: m.id.clone(), dir: dir.to_path_buf(), info: Ok(info), script: Some(*m), manifest_file: script::FILE })
+        }
+    }
+}
+
+fn bad_script(folder: &str, dir: &Path, why: String) -> ModEntry {
+    ModEntry { id: folder.to_string(), dir: dir.to_path_buf(), info: Err(why), script: None, manifest_file: script::FILE }
 }
 
 pub fn parse_active(text: &str) -> Vec<String> {
@@ -169,12 +221,18 @@ impl ModStore {
                 if id.starts_with('.') || id.ends_with(".tmp") {
                     continue;
                 }
-                let mj = p.join("mod.json");
+                let (mj, oj) = (p.join("mod.json"), script::manifest_in(&p));
+                if let Some(oj) = oj {
+                    if let Some(entry) = script_entry(&id, &p, &oj, &entries) {
+                        entries.push(entry);
+                        continue;
+                    }
+                }
                 if !mj.is_file() {
                     continue;
                 }
                 let info = std::fs::read(&mj).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice::<ModInfo>(&b).map_err(|e| e.to_string()));
-                entries.push(ModEntry { id, dir: p, info });
+                entries.push(ModEntry { id, dir: p, info, script: None, manifest_file: "mod.json" });
             }
         }
         entries.sort_by(|a, b| a.name().to_lowercase().cmp(&b.name().to_lowercase()));
@@ -246,14 +304,25 @@ impl ModStore {
         Ok(())
     }
 
-    /// Moves an enabled mod one place up (towards higher priority) or down.
+    /// The switched-on mods that sit in the same list on the page as `id` (script and native mods, or texture packs), in priority order.
+    pub fn group_of(&self, id: &str) -> Vec<&String> {
+        let m = self.master_of(id);
+        self.active.iter().filter(|a| self.master_of(a) == m).collect()
+    }
+
+    /// Moves an enabled mod one place up (towards higher priority) or down, past the next mod of its own list.
     pub fn move_by(&mut self, id: &str, delta: i32) {
-        let Some(i) = self.active.iter().position(|a| a == id) else { return };
+        let group: Vec<String> = self.group_of(id).into_iter().cloned().collect();
+        let Some(i) = group.iter().position(|a| a == id) else { return };
         let j = i as i32 + delta;
-        if j < 0 || j as usize >= self.active.len() {
+        if j < 0 || j as usize >= group.len() {
             return;
         }
-        self.active.swap(i, j as usize);
+        let other = group[j as usize].clone();
+        let (a, b) = (self.active.iter().position(|x| x == id), self.active.iter().position(|x| *x == other));
+        if let (Some(a), Some(b)) = (a, b) {
+            self.active.swap(a, b);
+        }
     }
 
     /// To the Recycle Bin, and out of active.txt.
@@ -362,7 +431,7 @@ mod tests {
 
         // a per-mod switch changed while the tick is off is remembered, too
         assert!(s2.set_enabled("beta", false, "rac1").is_ok());
-        s2.move_by("gamma", 1);
+        s2.active.swap(0, 1); // the order changed while the tick is off, too
         s2.save().unwrap();
         let s3 = ModStore::load(&d);
         assert_eq!(s3.active, vec!["alpha", "gamma"]);
@@ -434,6 +503,89 @@ mod tests {
         let mut s = ModStore::load(&d);
         assert_eq!(s.entries.len(), 1);
         assert!(s.set_enabled("bad", true, "rac1").is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn write_script(dir: &Path, folder: &str, text: &str) {
+        let d = dir.join(folder);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(script::FILE), text).unwrap();
+    }
+
+    const ARSENAL: &str = include_str!("../../tests/data/arsenal-mastery.omni-mod.json");
+
+    #[test]
+    fn a_mod_made_for_openrac_is_listed_and_omni_mod_json_wins() {
+        let d = scratch("compat");
+        // compat: OpenRAC's manifest file name, alone and next to an omni-mod.json
+        for (folder, file, id) in [("old", script::FILE_COMPAT, "old-id"), ("both", script::FILE_COMPAT, "compat-id"), ("both", script::FILE, "new-id")] {
+            std::fs::create_dir_all(d.join(folder)).unwrap();
+            std::fs::write(d.join(folder).join(file), ARSENAL.replace("arsenal-mastery", id)).unwrap();
+        }
+        let s = ModStore::load(&d);
+        let mut ids: Vec<&str> = s.entries.iter().map(|e| e.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["new-id", "old-id"]);
+        assert!(s.get("old-id").unwrap().is_script());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn script_mods_are_listed_by_their_manifest_id_next_to_texture_packs() {
+        let d = scratch("script");
+        write_mod(&d, "pack", "textures", "", "rac1");
+        write_script(&d, "arsenal-mastery", ARSENAL);
+        write_script(&d, "renamed-folder", &ARSENAL.replace("arsenal-mastery", "other-id").replace("Arsenal Mastery", "Other"));
+        write_script(&d, "broken", "{ nope");
+        write_script(&d, "datapack", "{\"format\":1,\"id\":\"dp\",\"name\":\"DP\"}");
+        write_script(&d, "twin", ARSENAL); // same id as arsenal-mastery
+        let mut s = ModStore::load(&d);
+        let ids: Vec<&str> = s.entries.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"arsenal-mastery") && ids.contains(&"other-id") && !ids.contains(&"renamed-folder") && ids.contains(&"pack"), "{ids:?}");
+        assert!(ids.contains(&"broken") && !ids.contains(&"datapack"), "a format 1 data pack with no mod.json is not a mod here: {ids:?}");
+        let a = s.get("arsenal-mastery").unwrap();
+        assert_eq!(a.script.as_ref().unwrap().settings.len(), 13);
+        assert_eq!(s.get("other-id").unwrap().dir.file_name().unwrap(), "renamed-folder", "active.txt and settings.json use the manifest id, the folder is only where it lives");
+        assert_eq!(a.info.as_ref().unwrap().kind, "script");
+        assert_eq!(a.cannot_enable("rac1"), None);
+        assert!(a.cannot_enable("rac2").unwrap().contains("another game"));
+        let b = s.get("broken").unwrap();
+        assert!(b.cannot_enable("rac1").unwrap().starts_with("omni-mod.json has a problem"), "{:?}", b.cannot_enable("rac1"));
+        assert_eq!(b.name(), "broken", "a broken manifest shows under its folder name");
+        let twin = s.entries.iter().find(|e| e.id == "twin").unwrap();
+        assert!(twin.info.as_ref().unwrap_err().contains("already has the id"));
+        // on/off through active.txt with the manifest id; the Load mods tick governs it
+        assert!(s.set_enabled("arsenal-mastery", true, "rac1").is_ok());
+        assert!(s.set_enabled("broken", true, "rac1").is_err());
+        assert_eq!(s.master_of("arsenal-mastery"), Some(Master::Mods));
+        s.save().unwrap();
+        assert!(read(&d.join("active.txt")).lines().any(|l| l == "arsenal-mastery"));
+        s.set_master(Master::Mods, false);
+        s.save().unwrap();
+        assert!(parse_active(&read(&d.join("active.txt"))).is_empty());
+        assert!(ModStore::load(&d).is_enabled("arsenal-mastery") && !ModStore::load(&d).is_loaded("arsenal-mastery"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn priority_moves_stay_inside_the_mods_own_list() {
+        let d = scratch("groups");
+        write_mod(&d, "t1", "textures", "", "rac1");
+        write_mod(&d, "t2", "textures", "", "rac1");
+        write_script(&d, "arsenal-mastery", ARSENAL);
+        write_script(&d, "other-id", &ARSENAL.replace("arsenal-mastery", "other-id"));
+        std::fs::write(d.join("active.txt"), "t1
+arsenal-mastery
+t2
+other-id
+").unwrap();
+        let mut s = ModStore::load(&d);
+        s.move_by("t1", 1);
+        assert_eq!(s.active, vec!["t2", "arsenal-mastery", "t1", "other-id"], "t1 swaps with t2, not with the script mod between them");
+        s.move_by("other-id", -1);
+        assert_eq!(s.active, vec!["t2", "other-id", "t1", "arsenal-mastery"]);
+        s.move_by("other-id", -1);
+        assert_eq!(s.active, vec!["t2", "other-id", "t1", "arsenal-mastery"], "already first in its list");
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -79,9 +79,9 @@ fn saved_ids(data: &Path) -> Vec<String> {
 
 #[test]
 fn select_install_opens_the_other_install() {
-    let (mut a, e) = lib_app("select", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("select", &["0.4.0", "0.3.1"]);
     assert_eq!(a.cur_id.as_deref(), Some(e.ids[0].as_str()));
-    assert_eq!(a.info.local_version, "0.3.5");
+    assert_eq!(a.info.local_version, "0.4.0");
     assert!(a.select_install(&e.ids[1]));
     assert_eq!(a.cur_id.as_deref(), Some(e.ids[1].as_str()));
     assert_eq!(a.root, e.roots[1]);
@@ -97,7 +97,7 @@ fn select_install_opens_the_other_install() {
 
 #[test]
 fn select_is_refused_while_the_game_runs() {
-    let (mut a, e) = lib_app("select_busy", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("select_busy", &["0.4.0", "0.3.1"]);
     a.game_external = true;
     assert!(!a.select_install(&e.ids[1]));
     assert_eq!(a.cur_id.as_deref(), Some(e.ids[0].as_str()), "the open install did not change");
@@ -107,7 +107,7 @@ fn select_is_refused_while_the_game_runs() {
 
 #[test]
 fn clicking_open_on_a_library_card_switches_install() {
-    let (mut a, e) = lib_app("select_click", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("select_click", &["0.4.0", "0.3.1"]);
     a.sel = Sel::Library;
     let mut h = harness(a);
     h.run();
@@ -123,7 +123,7 @@ fn clicking_open_on_a_library_card_switches_install() {
 
 #[test]
 fn remove_install_keeps_the_files_and_opens_the_next_one() {
-    let (mut a, e) = lib_app("remove", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("remove", &["0.4.0", "0.3.1"]);
     a.remove_install(&e.ids[0]);
     assert_eq!(a.library.entries.len(), 1);
     assert_eq!(a.cur_id.as_deref(), Some(e.ids[1].as_str()), "the next install is open now");
@@ -143,7 +143,7 @@ fn remove_install_keeps_the_files_and_opens_the_next_one() {
 
 #[test]
 fn remove_is_refused_for_the_install_that_is_running() {
-    let (mut a, e) = lib_app("remove_busy", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("remove_busy", &["0.4.0", "0.3.1"]);
     a.game_external = true;
     a.remove_install(&e.ids[0]);
     assert_eq!(a.library.entries.len(), 2, "the running install stays in the list");
@@ -154,7 +154,7 @@ fn remove_is_refused_for_the_install_that_is_running() {
 
 #[test]
 fn remove_from_list_needs_a_second_click() {
-    let (mut a, e) = lib_app("remove_click", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("remove_click", &["0.4.0", "0.3.1"]);
     a.sel = Sel::Library;
     let mut h = harness(a);
     h.run();
@@ -172,7 +172,7 @@ fn remove_from_list_needs_a_second_click() {
 
 #[test]
 fn new_install_input_checks() {
-    let (mut a, e) = lib_app("new_bad", &["0.3.5"]);
+    let (mut a, e) = lib_app("new_bad", &["0.4.0"]);
     assert!(a.new_install("").unwrap_err().contains("Choose a folder"));
     assert!(a.new_install("   ").unwrap_err().contains("Choose a folder"));
     let file = e.data.join("a_file.txt");
@@ -192,7 +192,7 @@ fn new_install_input_checks() {
 
 #[test]
 fn new_install_in_a_folder_that_is_already_listed_opens_it() {
-    let (mut a, e) = lib_app("new_dup", &["0.3.5", "0.3.1"]);
+    let (mut a, e) = lib_app("new_dup", &["0.4.0", "0.3.1"]);
     // typed with quotes, as pasted from Explorer
     let r = a.new_install(&format!("\"{}\"", e.roots[1].display())).unwrap();
     assert!(r.contains("already in your list"), "{r}");
@@ -203,7 +203,7 @@ fn new_install_in_a_folder_that_is_already_listed_opens_it() {
 
 #[test]
 fn new_install_in_an_unpacked_release_tree_is_listed_and_waits_for_the_disc() {
-    let (mut a, e) = lib_app("new_tree", &["0.3.5"]);
+    let (mut a, e) = lib_app("new_tree", &["0.4.0"]);
     let tree = e.data.join("unpacked");
     write(&tree.join("VERSION"), "0.3.1\n");
     write(&tree.join("setup.ps1"), "# s");
@@ -225,7 +225,7 @@ fn new_install_in_an_unpacked_release_tree_is_listed_and_waits_for_the_disc() {
 
 #[test]
 fn new_install_downloads_into_an_empty_folder_from_a_test_source() {
-    let (mut a, e) = lib_app("new_dl", &["0.3.5"]);
+    let (mut a, e) = lib_app("new_dl", &["0.4.0"]);
     let rel = e.data.join("rel");
     let mut zip = std::io::Cursor::new(Vec::new());
     {
@@ -265,7 +265,7 @@ fn profile_options(root: &Path, id: &str) -> String {
 
 #[test]
 fn a_crash_marker_is_recovered_at_the_next_start() {
-    let (a, e) = lib_app("marker", &["0.3.5"]);
+    let (a, e) = lib_app("marker", &["0.4.0"]);
     let g = game_by_id("rac1").unwrap();
     let id = a.profile_id.clone();
     assert_eq!(id, "default");
@@ -289,7 +289,7 @@ fn a_crash_marker_is_recovered_at_the_next_start() {
 #[test]
 fn a_marker_stays_while_the_game_is_still_running() {
     use std::os::windows::fs::OpenOptionsExt;
-    let (a, e) = lib_app("marker_busy", &["0.3.5"]);
+    let (a, e) = lib_app("marker_busy", &["0.4.0"]);
     let g = game_by_id("rac1").unwrap();
     a.profiles.swap_in(g, "default").unwrap();
     write(&e.roots[0].join("player/pc_options.txt"), "version=1\nwater=medium\n");
@@ -307,7 +307,7 @@ fn a_marker_stays_while_the_game_is_still_running() {
 
 #[test]
 fn the_game_closing_copies_its_options_back_into_the_profile() {
-    let (mut a, e) = lib_app("copyback", &["0.3.5"]);
+    let (mut a, e) = lib_app("copyback", &["0.4.0"]);
     let g = game_by_id("rac1").unwrap();
     a.profiles.swap_in(g, "default").unwrap();
     // the game ran and wrote its options; it is gone now, but the launcher still believes it runs
@@ -326,7 +326,7 @@ fn the_game_closing_copies_its_options_back_into_the_profile() {
 // ------------------------------------------------------------------ profile picker
 
 fn play_harness(name: &str) -> (Harness<'static, LauncherApp>, Env) {
-    let (mut a, e) = lib_app(name, &["0.3.5"]);
+    let (mut a, e) = lib_app(name, &["0.4.0"]);
     a.sel = Sel::Game("rac1");
     a.tab = Tab::Play;
     (harness(a), e)
@@ -418,7 +418,7 @@ fn profile_picker_refuses_an_empty_name_and_keeps_the_form_open() {
 
 #[test]
 fn profile_picker_is_locked_while_the_game_runs() {
-    let (mut a, e) = lib_app("picker_busy", &["0.3.5"]);
+    let (mut a, e) = lib_app("picker_busy", &["0.4.0"]);
     a.profiles.create("Second").unwrap();
     a.profile_list = a.profiles.list();
     let second = a.profile_list.iter().find(|p| p.meta.name == "Second").unwrap().id.clone();
@@ -432,7 +432,7 @@ fn profile_picker_is_locked_while_the_game_runs() {
 
 #[test]
 fn the_mods_switch_writes_the_selected_profiles_own_list() {
-    let (mut a, e) = lib_app("mods", &["0.3.5"]);
+    let (mut a, e) = lib_app("mods", &["0.4.0"]);
     let root = e.roots[0].clone();
     write(&root.join("mods/hd/mod.json"), "{\"format\":1,\"id\":\"hd\",\"name\":\"HD Pack\",\"author\":\"A\",\"version\":\"1.0\",\"description\":\"d\",\"game\":\"rac1\",\"kind\":\"textures\",\"serials\":[\"SCES-50916\"]}");
     write(&root.join("mods/hd/replacements/0123456789abcdef-00000001.png"), "x");
@@ -462,7 +462,7 @@ fn texture_mod(root: &Path, id: &str, name: &str) {
 #[test]
 fn the_master_ticks_are_kept_per_profile_and_reach_active_txt_as_comment_lines() {
     use rac_rs_launcher::mods::{parse_active, Master};
-    let (mut a, e) = lib_app("master", &["0.3.5"]);
+    let (mut a, e) = lib_app("master", &["0.4.0"]);
     let root = e.roots[0].clone();
     texture_mod(&root, "hd", "HD Pack");
     texture_mod(&root, "cel", "Cel Pack");
@@ -533,7 +533,7 @@ fn a_game_version_without_texture_packs_greys_the_texture_tick() {
     let mut h = harness(a);
     h.run();
     assert!(h.get_by_label("Load texture packs, master switch").accesskit_node().is_disabled());
-    assert!(h.query_all_by_label_contains("Needs game version 0.3.5 or newer").count() >= 1);
+    assert!(h.query_all_by_label_contains("Needs game version 0.4.0 or newer").count() >= 1);
     cleanup(&e);
 }
 
@@ -559,7 +559,7 @@ fn pump_until(h: &mut Harness<'static, LauncherApp>, want: &str) {
 fn adding_a_pack_reads_and_copies_on_workers_and_the_window_keeps_answering() {
     use rac_rs_launcher::mods::import;
     use rac_rs_launcher::ui::page_mods::AddState;
-    let (mut a, e) = lib_app("modasync", &["0.3.5"]);
+    let (mut a, e) = lib_app("modasync", &["0.4.0"]);
     let root = e.roots[0].clone();
     let pack = e.data.join("Big Pack");
     for i in 0..600u64 {

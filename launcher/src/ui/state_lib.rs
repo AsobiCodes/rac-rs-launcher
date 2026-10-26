@@ -48,6 +48,8 @@ pub struct LibUi {
     pub dialog: Option<AddDialog>,
     /// Library id whose "Remove from list" asks for a second click.
     pub confirm_remove: Option<String>,
+    /// Library id of a backup whose "Delete backup" asks for a second click.
+    pub confirm_delete: Option<String>,
     /// The message under the dialog (error or note) after Add / Install was clicked.
     pub message: Option<(String, bool)>,
 }

@@ -202,11 +202,11 @@ mod tests {
     #[test]
     fn update_and_repair_args() {
         let mut o = opts();
-        o.update = Some(("0.3.5".into(), true));
+        o.update = Some(("0.4.0".into(), true));
         o.test_update_base = Some("E:\\base\\".into());
         o.regenerate = true;
         let a = build_args(&o).join(" ");
-        assert!(a.contains("-SkipHash -ApplyUpdate -NewVersion 0.3.5 -FinishOnly -SkipUnblock -TestUpdateBase E:\\base -NoShortcut -Regenerate"), "{a}");
+        assert!(a.contains("-SkipHash -ApplyUpdate -NewVersion 0.4.0 -FinishOnly -SkipUnblock -TestUpdateBase E:\\base -NoShortcut -Regenerate"), "{a}");
     }
 
     #[test]

@@ -297,12 +297,12 @@ mod tests {
     #[test]
     fn update_mode_steps_and_expect_compiles() {
         let mut p = Progress::new(true);
-        feed_all(&mut p, "== (u) updating to v0.3.5\n  downloading v0.3.5 ...\n  4 files updated, 0 removed\nexpect-compiles: 4\n== (a) tools");
+        feed_all(&mut p, "== (u) updating to v0.4.0\n  downloading v0.4.0 ...\n  4 files updated, 0 removed\nexpect-compiles: 4\n== (a) tools");
         assert_eq!(p.step, 1);
         assert_eq!(p.expect, 4);
         assert_eq!(p.step_names()[0], "Download update");
         p.feed_line("== (d) building the game");
-        p.feed_line("   Compiling rac-rs v0.3.5");
+        p.feed_line("   Compiling rac-rs v0.4.0");
         // the first "Compiling" of an update is not counted as done
         let v = p.update_progress(Instant::now());
         assert!((30..=40).contains(&v), "{v}");

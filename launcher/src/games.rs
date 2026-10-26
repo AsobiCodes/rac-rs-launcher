@@ -215,14 +215,14 @@ mod tests {
         std::fs::write(d.join("build/release/rac-rs.exe"), b"x").unwrap();
         std::fs::write(d.join("Play.cmd"), b"x").unwrap();
         std::fs::write(d.join("generated/play.cfg"), "iso=C:\\games\\rc.iso\n").unwrap();
-        std::fs::write(d.join("VERSION"), "0.3.5\n").unwrap();
+        std::fs::write(d.join("VERSION"), "0.4.0\n").unwrap();
         let i = detect(&d, g);
         assert!(i.installed);
         assert_eq!(i.built_version, "0.1.0", "no built_version.txt: built before versions existed");
         assert!(i.finish_pending());
         assert_eq!(i.iso.as_deref(), Some(Path::new("C:\\games\\rc.iso")));
         assert!(!i.iso_exists);
-        std::fs::write(d.join("generated/built_version.txt"), "0.3.5\n").unwrap();
+        std::fs::write(d.join("generated/built_version.txt"), "0.4.0\n").unwrap();
         assert!(!detect(&d, g).finish_pending());
     }
 

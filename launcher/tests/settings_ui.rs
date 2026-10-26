@@ -39,7 +39,7 @@ fn harness(root: &PathBuf, tab: Tab) -> Harness<'static, LauncherApp> {
     app.sel = Sel::Game("rac1");
     app.tab = tab;
     Harness::builder()
-        .with_size(vec2(1100.0, 2600.0))
+        .with_size(vec2(1100.0, 3600.0))
         .with_context_setup(|ctx| theme::apply(ctx))
         .build_ui_state(|ui, la: &mut LauncherApp| la.draw(ui), LauncherApp::new(app))
 }
@@ -154,5 +154,47 @@ fn presets_set_the_values_and_a_changed_value_shows_custom() {
     for key in ["draw=", "smoothing=", "hud=", "ao=", "water=", "waves=", "vegetation="] {
         assert!(!t.contains(key), "High leaves {key} to the game's default:\n{t}");
     }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Skip intro (game 0.4.0 and newer): On writes `intro=skip`, Off writes `intro=play`; other lines of the file are kept.
+#[test]
+fn skip_intro_row_writes_the_intro_key() {
+    const LABEL: &str = "Skip intro (go straight to the title screen)";
+    let root = installed("intro");
+    std::fs::write(root.join("VERSION"), "0.4.0\n").unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), "0.4.0\n").unwrap();
+    std::fs::write(root.join("player/pc_options.txt"), "version=1\nlighting=classic\nfuture_thing=7\nkeys=r2:Period\n").unwrap();
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(!h.get_by_label(&format!("{LABEL}: On")).accesskit_node().is_disabled());
+    h.get_by_label(&format!("{LABEL}: On")).click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|l| l == "intro=skip"), "after On:\n{t}");
+    assert!(t.lines().any(|l| l == "future_thing=7") && t.lines().any(|l| l == "keys=r2:Period") && t.lines().any(|l| l == "lighting=classic"), "other lines kept:\n{t}");
+    h.get_by_label(&format!("{LABEL}: Off")).click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|l| l == "intro=play") && !t.contains("intro=skip"), "after Off:\n{t}");
+    assert!(t.lines().any(|l| l == "keys=r2:Period"), "kept:\n{t}");
+    let _ = std::fs::remove_dir_all(&root);
+
+    // a game older than 0.4.0 does not know the key: greyed, never written
+    let root = installed("intro_old");
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(h.get_by_label(&format!("{LABEL}: On")).accesskit_node().is_disabled());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The "Support the project" link is in the sidebar on every page; it is only a widget (nothing opens without a click).
+#[test]
+fn support_link_is_in_the_sidebar() {
+    let root = installed("support");
+    let mut h = harness(&root, Tab::Play);
+    h.run();
+    assert_eq!(h.query_all_by_label("Support the project").count(), 1);
+    assert_eq!(rac_rs_launcher::play::SUPPORT_URL, "https://ko-fi.com/asobicodes");
     let _ = std::fs::remove_dir_all(&root);
 }

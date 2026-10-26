@@ -31,7 +31,7 @@ fn write(p: &Path, text: &str) {
     std::fs::write(p, text).unwrap();
 }
 
-const CHANGELOG: &str = "# Changelog\n\n## v0.3.5\n- Faster start on slow PCs.\n- New launcher: install, play and mods in one window.\n- Fixed the water flicker in Pokitaru.\n\n## v0.3.1\n- Fixed a freeze at start-up on some AMD cards.\n";
+const CHANGELOG: &str = "# Changelog\n\n## v0.4.0\n- Faster start on slow PCs.\n- New launcher: install, play and mods in one window.\n- Fixed the water flicker in Pokitaru.\n\n## v0.3.1\n- Fixed a freeze at start-up on some AMD cards.\n";
 
 /// A finished install in a scratch folder; `remote` = the version the fake update server offers.
 fn installed_root(name: &str, local: &str, remote: &str) -> (PathBuf, String) {
@@ -187,7 +187,7 @@ fn s09_installed() {
 
 #[test]
 fn s10_update_banner() {
-    let (root, base) = installed_root("s10", "0.3.1", "0.3.5");
+    let (root, base) = installed_root("s10", "0.3.1", "0.4.0");
     let mut a = make_app(root, Some(base));
     a.update_changes_open = true;
     shot("10_update_banner", a);
@@ -343,10 +343,10 @@ fn s19_launcher_page() {
 
 #[test]
 fn s20_scaled_and_small() {
-    let (root, base) = installed_root("s20", "0.3.1", "0.3.5");
+    let (root, base) = installed_root("s20", "0.3.1", "0.4.0");
     let a = make_app(root, Some(base));
     render("20_installed_update_1p5x", (1100.0, 700.0), 1.5, a);
-    let (root, base) = installed_root("s20b", "0.3.1", "0.3.5");
+    let (root, base) = installed_root("s20b", "0.3.1", "0.4.0");
     let mut b = make_app(root, Some(base));
     select_tab(&mut b, Tab::Settings);
     render("21_settings_small_860x580", (860.0, 580.0), 1.0, b);
@@ -368,7 +368,7 @@ fn s21_settings_tall() {
 
 #[test]
 fn s47_mods_master_ticks() {
-    let (root, base) = installed_root("s47", "0.3.5", "0.3.5");
+    let (root, base) = installed_root("s47", "0.4.0", "0.4.0");
     add_mods(&root);
     let mut a = make_app(root, Some(base));
     select_tab(&mut a, Tab::Mods);
@@ -379,7 +379,7 @@ fn s47_mods_master_ticks() {
 
 #[test]
 fn s48_settings_presets() {
-    let (root, base) = installed_root("s48", "0.3.5", "0.3.5");
+    let (root, base) = installed_root("s48", "0.4.0", "0.4.0");
     let mut a = make_app(root, Some(base));
     select_tab(&mut a, Tab::Settings);
     a.choose_preset(rac_rs_launcher::ui::presets::Preset::Medium);
@@ -394,4 +394,29 @@ fn s49_settings_presets_custom_on_0_2_2() {
     a.choose_preset(rac_rs_launcher::ui::presets::Preset::Low);
     a.options.set("ao", Some("high"));
     shot("49_settings_preset_custom_old_game", a);
+}
+
+#[test]
+fn s60_settings_skip_intro() {
+    let (root, base) = installed_root("s60", "0.4.0", "0.4.0");
+    write(&root.join("player/pc_options.txt"), "version=1\nintro=skip\nkeys=r2:Period\n");
+    let mut a = make_app(root, Some(base));
+    select_tab(&mut a, Tab::Settings);
+    render("60_polish_settings_skip_intro", (1100.0, 3300.0), 1.0, a);
+}
+
+#[test]
+fn s61_sidebar_support_link() {
+    let (root, base) = installed_root("s61", "0.4.0", "0.4.0");
+    let mut a = make_app(root, Some(base));
+    select_tab(&mut a, Tab::Play);
+    render("61_polish_play_support_link", (1100.0, 700.0), 1.0, a);
+}
+
+#[test]
+fn s62_sidebar_support_link_small() {
+    let (root, base) = installed_root("s62", "0.4.0", "0.4.0");
+    let mut a = make_app(root, Some(base));
+    select_tab(&mut a, Tab::Play);
+    render("62_polish_play_support_link_small_860x580", (860.0, 580.0), 1.0, a);
 }

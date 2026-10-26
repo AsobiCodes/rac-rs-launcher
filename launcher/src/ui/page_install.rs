@@ -169,7 +169,8 @@ impl App {
     pub fn show_failed(&mut self, ui: &mut Ui) {
         let Some(f) = self.failure.as_ref() else { return };
         let (msg, details, log, is_update) = (f.message.clone(), f.details.clone(), f.log.clone(), f.update);
-        let (mut retry, mut close, mut copy) = (false, false, false);
+        let (mut retry, mut close, mut copy, mut play_backup) = (false, false, false, false);
+        let backup = if is_update { self.backup_for_failure() } else { None };
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             narrow(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -191,6 +192,9 @@ impl App {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         retry = theme::primary_button(ui, "Try again", Vec2::new(140.0, 40.0), true);
+                        if let Some((_, v)) = &backup {
+                            play_backup = theme::button_enabled(ui, &format!("Play the backup (v{v})"), !self.game_running());
+                        }
                         close = theme::button(ui, if is_update { "Play old version" } else { "Back" });
                     });
                 });
@@ -202,6 +206,10 @@ impl App {
         }
         if retry {
             self.retry_after_failure();
+        }
+        if play_backup {
+            let ctx = ui.ctx().clone();
+            self.play_the_backup(&ctx);
         }
         if close {
             self.failure = None;

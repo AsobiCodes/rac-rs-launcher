@@ -21,7 +21,7 @@ struct MasterRow {
 fn status_text(m: Master, on: bool, installed: usize, switched_on: usize) -> String {
     let (noun, none) = match m {
         Master::Textures => ("packs", "No texture packs yet. Add one below."),
-        Master::Mods => ("mods", "For script and native mods. None are installed yet, so this has nothing to do."),
+        Master::Mods => ("mods", "No script mods yet. Put a mod's folder into the mods folder and it shows up below."),
     };
     if installed == 0 {
         return none.to_string();
@@ -41,8 +41,9 @@ impl App {
             .map(|m| {
                 let (installed, switched_on) = store.master_counts(m);
                 let on = store.master_on(m);
-                // only the texture packs depend on a game version so far (the game reads the packs and active.txt from 0.3.5 on)
-                let locked = (m == Master::Textures).then(|| gating::needs_text(&self.info.local_version, gating::TEXTURE_PACKS)).flatten();
+                // the game reads the packs, the script mods, active.txt and settings.json from 0.4.0 on
+                let feature = if m == Master::Textures { gating::TEXTURE_PACKS } else { gating::SCRIPT_MODS };
+                let locked = gating::needs_text(&self.info.local_version, feature);
                 let empty = installed == 0;
                 match locked {
                     Some(t) => MasterRow { master: m, on, enabled: false, text: t, reason: true },
@@ -99,7 +100,7 @@ mod tests {
         assert_eq!(status_text(Master::Textures, true, 3, 1), "1 of 3 packs is switched on below.");
         assert_eq!(status_text(Master::Textures, true, 3, 2), "2 of 3 packs are switched on below.");
         assert!(status_text(Master::Textures, false, 3, 2).starts_with("Off: the game loads no packs."));
-        assert!(status_text(Master::Mods, true, 0, 0).contains("None are installed yet"));
+        assert!(status_text(Master::Mods, true, 0, 0).contains("No script mods yet"));
         assert!(status_text(Master::Mods, false, 2, 2).starts_with("Off: the game loads no mods."));
     }
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 pub const REPO_RAW: &str = "https://raw.githubusercontent.com/AsobiCodes/rac-rs/main";
 
-/// -1 / 0 / 1 like [version]::CompareTo; unreadable parts count as 0. A test suffix ("0.3.5-rc1") sorts just below the same number without it.
+/// -1 / 0 / 1 like [version]::CompareTo; unreadable parts count as 0. A test suffix ("0.4.0-rc1") sorts just below the same number without it.
 pub fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
     let split = |s: &str| -> (Vec<u64>, bool) {
         let s = s.trim().trim_start_matches('v');
@@ -136,7 +136,7 @@ mod tests {
     use super::*;
     use std::cmp::Ordering;
 
-    const LOG: &str = "# Changelog\n\n## v0.3.5\n- Fixed the thing\n- Second fix\n\n## v0.3.1\n* AMD start-up fix\n\n## v0.3.0\n- Big release\n";
+    const LOG: &str = "# Changelog\n\n## v0.4.0\n- Fixed the thing\n- Second fix\n\n## v0.3.1\n* AMD start-up fix\n\n## v0.3.0\n- Big release\n";
 
     #[test]
     fn versions_compare_numerically() {
@@ -147,36 +147,36 @@ mod tests {
 
     #[test]
     fn change_list_is_the_versions_between() {
-        let t = changelog_for(LOG, "0.3.0", "0.3.5");
-        assert_eq!(t, "Version 0.3.5\n\u{2022} Fixed the thing\n\u{2022} Second fix\n\nVersion 0.3.1\n\u{2022} AMD start-up fix");
+        let t = changelog_for(LOG, "0.3.0", "0.4.0");
+        assert_eq!(t, "Version 0.4.0\n\u{2022} Fixed the thing\n\u{2022} Second fix\n\nVersion 0.3.1\n\u{2022} AMD start-up fix");
         assert_eq!(changelog_for(LOG, "0.3.1", "0.3.1"), "");
-        assert_eq!(changelog_for(LOG, "0.3.1", "0.3.5"), "Version 0.3.5\n\u{2022} Fixed the thing\n\u{2022} Second fix");
+        assert_eq!(changelog_for(LOG, "0.3.1", "0.4.0"), "Version 0.4.0\n\u{2022} Fixed the thing\n\u{2022} Second fix");
     }
 
     #[test]
     fn offer_when_the_remote_is_newer() {
-        match evaluate("0.3.1", "0.3.1", Some("0.3.5\n"), Some(LOG)) {
+        match evaluate("0.3.1", "0.3.1", Some("0.4.0\n"), Some(LOG)) {
             UpdateState::Available(o) => {
-                assert_eq!((o.from.as_str(), o.to.as_str(), o.finish), ("0.3.1", "0.3.5", false));
-                assert!(o.changes.starts_with("Version 0.3.5"));
+                assert_eq!((o.from.as_str(), o.to.as_str(), o.finish), ("0.3.1", "0.4.0", false));
+                assert!(o.changes.starts_with("Version 0.4.0"));
             }
             s => panic!("{s:?}"),
         }
-        assert_eq!(evaluate("0.3.5", "0.3.5", Some("0.3.5"), Some(LOG)), UpdateState::UpToDate("0.3.5".into()));
-        assert_eq!(evaluate("0.3.5", "0.3.5", None, None), UpdateState::Offline);
-        assert_eq!(evaluate("0.3.5", "0.3.5", Some("garbage"), None), UpdateState::Offline);
+        assert_eq!(evaluate("0.4.0", "0.4.0", Some("0.4.0"), Some(LOG)), UpdateState::UpToDate("0.4.0".into()));
+        assert_eq!(evaluate("0.4.0", "0.4.0", None, None), UpdateState::Offline);
+        assert_eq!(evaluate("0.4.0", "0.4.0", Some("garbage"), None), UpdateState::Offline);
     }
 
     #[test]
     fn unfinished_update_uses_the_built_version_as_start() {
-        // files are 0.3.5 but the game exe is still 0.3.0, the server says 0.3.6: from = built
-        match evaluate("0.3.5", "0.3.0", Some("0.3.6"), Some("## v0.3.6\n- x\n## v0.3.5\n- y\n## v0.3.1\n- z\n")) {
+        // files are 0.4.0 but the game exe is still 0.3.0, the server says 0.3.6: from = built
+        match evaluate("0.4.0", "0.3.0", Some("0.3.6"), Some("## v0.3.6\n- x\n## v0.4.0\n- y\n## v0.3.1\n- z\n")) {
             UpdateState::Available(o) => assert_eq!(o.from, "0.3.0"),
             s => panic!("{s:?}"),
         }
         // offline: the local rebuild is still offered
-        match evaluate("0.3.5", "0.3.0", None, Some(LOG)) {
-            UpdateState::Available(o) => assert!(o.finish && o.to == "0.3.5"),
+        match evaluate("0.4.0", "0.3.0", None, Some(LOG)) {
+            UpdateState::Available(o) => assert!(o.finish && o.to == "0.4.0"),
             s => panic!("{s:?}"),
         }
     }

@@ -5,11 +5,15 @@ use std::cmp::Ordering;
 
 /// Feature name of the texture packs in `mods\` (the game side ships in a later game version).
 pub const TEXTURE_PACKS: &str = "texture-packs";
+/// Feature name of the script and native mods (OmniLoader) in `mods\`; they come in the same game version as the texture packs.
+pub const SCRIPT_MODS: &str = "script-mods";
 
 /// (option key or feature name, first game version that knows it).
 pub const FIRST_VERSION: &[(&str, &str)] = &[
     // pc_options.txt: the graphics system (Vulkan / DirectX 12)
-    ("renderer", "0.3.5"),
+    ("renderer", "0.4.0"),
+    // pc_options.txt: the mouse speed of the Modern camera (before 0.4.0 the mouse followed camspeed)
+    ("mousespeed", "0.4.0"),
     // pc_options.txt keys that 0.2.1 / 0.2.2 do not read (they keep unknown lines and ignore them): all came with 0.3.0.
     // The 0.2.x file knows: lang camera strafe buyall lighting ao shadows display water particles sunrays (water / particles only classic|enhanced).
     ("camfeel", "0.3.0"),
@@ -23,8 +27,15 @@ pub const FIRST_VERSION: &[(&str, &str)] = &[
     ("smoothing", "0.3.0"),
     ("vegetation", "0.3.0"),
     ("waves", "0.3.0"),
-    // texture packs (and the Mods page master ticks, graphics presets) need this game version: the next public release is 0.3.5 (there is no 0.3.2 or 0.4.0)
-    (TEXTURE_PACKS, "0.3.5"),
+    // pc_options.txt: the volumetric fog (Graphics -> Effects -> Fog) came with 0.4.0
+    ("fog", "0.4.0"),
+    ("clouds", "0.4.0"),
+    ("texfilter", "0.4.0"),
+    // pc_options.txt: Skip intro (intro=play|skip)
+    ("intro", "0.4.0"),
+    // texture packs (and the Mods page master ticks, graphics presets) need this game version: the next public release is 0.4.0 (0.3.2 and 0.3.5 were never released)
+    (TEXTURE_PACKS, "0.4.0"),
+    (SCRIPT_MODS, "0.4.0"),
 ];
 
 /// (option key, one value of it, first game version where that value does something). Per-value rows: the key itself is older.
@@ -100,11 +111,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renderer_needs_035() {
+    fn renderer_needs_040() {
         assert!(!available("0.3.1", "renderer"));
         assert!(!available("0.2.9", "renderer"));
-        assert!(available("0.3.5", "renderer"));
-        assert!(available("0.3.10", "renderer"), "numeric compare: 10 > 2");
+        assert!(available("0.4.0", "renderer"));
+        assert!(available("0.10.0", "renderer"), "numeric compare: 10 > 4");
+        assert!(!available("0.3.10", "renderer"), "0.3.x is older than 0.4.0");
         assert!(available("1.0.0", "renderer"));
     }
 
@@ -112,10 +124,10 @@ mod tests {
     fn unknown_keys_are_available_and_texts_read_well() {
         assert!(available("0.1.0", "lighting"));
         assert!(needs_text("0.1.0", "lighting").is_none());
-        assert!(needs_text("0.3.5", "renderer").is_none());
+        assert!(needs_text("0.4.0", "renderer").is_none());
         let t = needs_text("0.3.1", "renderer").unwrap();
-        assert!(t.contains("0.3.5") && t.contains("0.3.1"));
-        assert!(!available("0.3.1", TEXTURE_PACKS) && available("0.3.5", TEXTURE_PACKS));
+        assert!(t.contains("0.4.0") && t.contains("0.3.1"));
+        assert!(!available("0.3.1", TEXTURE_PACKS) && available("0.4.0", TEXTURE_PACKS));
     }
 
     #[test]

@@ -88,6 +88,18 @@ pub fn open_path(p: &Path) {
     }
 }
 
+/// Opens a web address in the default browser (only when the player clicked a link; never called by itself).
+pub fn open_url(url: &str) {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("explorer.exe").arg(url).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
 /// Opens the folder of a file and selects it (plain open on other systems).
 pub fn reveal(p: &Path) {
     #[cfg(windows)]
@@ -170,8 +182,15 @@ pub fn free_bytes(dir: &Path) -> Option<u64> {
     }
 }
 
-/// To the Recycle Bin, never a hard delete.
+/// Tests only: true makes `recycle` delete its (scratch) path for good, so UI tests never fill the user's Recycle Bin.
+pub static TEST_NO_RECYCLE_BIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// To the Recycle Bin, never a hard delete (except under `TEST_NO_RECYCLE_BIN`).
 pub fn recycle(p: &Path) -> Result<(), String> {
+    if TEST_NO_RECYCLE_BIN.load(std::sync::atomic::Ordering::SeqCst) {
+        let r = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+        return r.map_err(|e| e.to_string());
+    }
     trash::delete(p).map_err(|e| e.to_string())
 }
 

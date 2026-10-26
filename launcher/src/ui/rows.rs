@@ -16,8 +16,9 @@ pub enum Kind {
     Choice(&'static [(&'static str, &'static str)]),
     /// The Camera row: Classic / Static / Smooth, stored as camera= and camfeel=.
     Camera,
-    /// Camera speed in percent, 10..200 in steps of 10; no key = the game's own Slow / Medium / Fast row.
-    CamSpeed,
+    /// A percent slider, 10..200 in steps of 10: Camera speed (no key = the game's own Slow / Medium / Fast row) and Mouse speed
+    /// (no key = the row's `default`, 50).
+    Percent,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -85,6 +86,14 @@ pub const ROWS: &[Row] = &[
         group: Group::Graphics,
     },
     Row {
+        key: "texfilter",
+        label: "Texture filtering",
+        help: "Smooth blends texture detail as you move. Classic keeps the original detail steps. Requires Lighting Enhanced.",
+        kind: Kind::Choice(&[("classic", "Classic"), ("smooth", "Smooth")]),
+        default: "smooth",
+        group: Group::Enhanced,
+    },
+    Row {
         key: "ao",
         label: "Ambient occlusion",
         help: "Soft shading in corners and creases.",
@@ -114,6 +123,22 @@ pub const ROWS: &[Row] = &[
         help: "Real moving waves on the sea (with Water on Medium or High).",
         kind: Kind::Choice(ON_OFF),
         default: "on",
+        group: Group::Enhanced,
+    },
+    Row {
+        key: "fog",
+        label: "Volumetric fog",
+        help: "Volumetric fog that drifts and catches the sun, in each planet's own fog colour. Classic is the original look.",
+        kind: Kind::Choice(LEVELS_CLASSIC),
+        default: "high",
+        group: Group::Enhanced,
+    },
+    Row {
+        key: "clouds",
+        label: "Volumetric clouds",
+        help: "Real 3D clouds that drift and change shape, lit by the sun. Classic is the original sky.",
+        kind: Kind::Choice(LEVELS_CLASSIC),
+        default: "high",
         group: Group::Enhanced,
     },
     Row {
@@ -149,7 +174,8 @@ pub const ROWS: &[Row] = &[
         group: Group::Enhanced,
     },
     Row { key: "camera", label: "Camera", help: "Classic is the original camera. Static is a plain modern camera. Smooth is the modern camera that follows Ratchet smoothly.", kind: Kind::Camera, default: "smooth", group: Group::Gameplay },
-    Row { key: "camspeed", label: "Camera speed", help: "How fast the camera turns, in percent. Default uses the game's own setting.", kind: Kind::CamSpeed, default: "", group: Group::Gameplay },
+    Row { key: "camspeed", label: "Camera speed", help: "How fast the right stick turns the camera, in percent. Default uses the game's own setting.", kind: Kind::Percent, default: "", group: Group::Gameplay },
+    Row { key: "mousespeed", label: "Mouse speed", help: "How fast the mouse turns the camera (Static and Smooth camera), in percent.", kind: Kind::Percent, default: "50", group: Group::Gameplay },
     Row {
         key: "strafe",
         label: "Strafe aiming",
@@ -172,6 +198,14 @@ pub const ROWS: &[Row] = &[
         help: "A shortcut at the Gadgetron vendor that fills up your ammo in one press.",
         kind: Kind::Choice(ON_OFF),
         default: "on",
+        group: Group::Gameplay,
+    },
+    Row {
+        key: "intro",
+        label: "Skip intro (go straight to the title screen)",
+        help: "Starts the game without the opening logos and movie. Off plays them as on the console.",
+        kind: Kind::Choice(&[("skip", "On"), ("play", "Off")]),
+        default: "play",
         group: Group::Gameplay,
     },
     Row {
@@ -198,7 +232,7 @@ pub fn current_index(o: &Options, row: &Row) -> Option<usize> {
             list.iter().position(|(val, _)| *val == v)
         }
         Kind::Camera => Some(o.camera_byte() as usize),
-        Kind::CamSpeed => None,
+        Kind::Percent => None,
     }
 }
 
@@ -211,19 +245,19 @@ pub fn choose(o: &mut Options, row: &Row, idx: usize) {
             }
         }
         Kind::Camera => o.set_camera_byte(idx.min(2) as u8),
-        Kind::CamSpeed => {}
+        Kind::Percent => {}
     }
 }
 
-/// Camera speed in percent the player set; None = the game's own row.
-pub fn camspeed(o: &Options) -> Option<u32> {
-    o.get("camspeed").and_then(|v| v.parse().ok())
+/// The percent the player set in a `Kind::Percent` row (`camspeed`, `mousespeed`); None = the row's default.
+pub fn percent(o: &Options, key: &str) -> Option<u32> {
+    o.get(key).and_then(|v| v.parse().ok())
 }
 
-pub fn set_camspeed(o: &mut Options, pct: Option<u32>) {
+pub fn set_percent(o: &mut Options, key: &str, pct: Option<u32>) {
     match pct {
-        Some(p) => o.set("camspeed", Some(&pcopts::snap_camspeed(p).to_string())),
-        None => o.set("camspeed", None),
+        Some(p) => o.set(key, Some(&pcopts::snap_camspeed(p).to_string())),
+        None => o.set(key, None),
     }
 }
 
@@ -272,9 +306,12 @@ mod tests {
         assert_eq!(current_index(&o, lang), None);
         choose(&mut o, lang, 2);
         assert_eq!(o.get("lang"), Some("de"));
-        set_camspeed(&mut o, Some(73));
-        assert_eq!(camspeed(&o), Some(70));
-        set_camspeed(&mut o, None);
-        assert_eq!(camspeed(&o), None);
+        set_percent(&mut o, "camspeed", Some(73));
+        assert_eq!(percent(&o, "camspeed"), Some(70));
+        set_percent(&mut o, "mousespeed", Some(140));
+        assert_eq!((percent(&o, "camspeed"), percent(&o, "mousespeed")), (Some(70), Some(140)), "two keys");
+        set_percent(&mut o, "camspeed", None);
+        assert_eq!(percent(&o, "camspeed"), None);
+        assert_eq!(o.get("mousespeed"), Some("140"));
     }
 }

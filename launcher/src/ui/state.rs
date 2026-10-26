@@ -66,6 +66,8 @@ pub enum View {
     Repair,
     /// The worker runs.
     Run,
+    /// The backup before an update is being copied.
+    Backup,
     Failed,
     Done,
 }
@@ -153,6 +155,8 @@ pub struct App {
     pub profile_list: Vec<Profile>,
     pub profile_ui: ProfileUi,
     pub lib_ui: LibUi,
+    /// "Back up your current version first" (see state_backup.rs).
+    pub backup: crate::ui::state_backup::BackupUi,
     pub cfg: LauncherCfg,
     pub sel: Sel,
     pub tab: Tab,
@@ -268,6 +272,7 @@ impl App {
             profile_list: Vec::new(),
             profile_ui: ProfileUi::default(),
             lib_ui: LibUi::default(),
+            backup: Default::default(),
             cur_id: None,
             data_dir,
             library,
@@ -327,7 +332,7 @@ impl App {
     }
 
     pub fn busy(&self) -> bool {
-        self.engine.as_ref().map(|e| e.running()).unwrap_or(false)
+        self.engine.as_ref().map(|e| e.running()).unwrap_or(false) || self.backup.job.is_some()
     }
 
     // ------------------------------------------------------------------ the old exe left by a launcher update
@@ -341,6 +346,14 @@ impl App {
 
     pub fn check_updates(&mut self) {
         if !self.info.installed {
+            return;
+        }
+        self.backup_forget_plan();
+        if self.is_backup() {
+            // a backup stays on its version for good: no check, no banner
+            if let Ok(mut g) = self.update.lock() {
+                *g = UpdateState::UpToDate(self.info.local_version.clone());
+            }
             return;
         }
         if let Ok(mut g) = self.update.lock() {
@@ -472,21 +485,26 @@ impl App {
         self.start_engine(opts);
     }
 
+    /// Why an update cannot start now (None = it can): the game runs, or the disc image is gone. Reads the install again.
+    pub fn update_blocker(&mut self) -> Option<String> {
+        self.refresh_info();
+        if self.game_running() {
+            return Some("The game is still running.\n\nClose it, then click Try again.".to_string());
+        }
+        match self.info.iso.clone().filter(|_| self.info.iso_exists) {
+            Some(_) => None,
+            None => {
+                let p = self.info.iso.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                Some(format!("Your disc image was not found at:\n{p}\n\nPut it back where it was, or use Repair / rebuild (Settings, Advanced) to pick it again."))
+            }
+        }
+    }
+
     pub fn start_update(&mut self, to: &str, finish: bool) {
         self.last_update = Some((to.to_string(), finish));
         self.run_kind = RunKind::Update { to: to.to_string(), finish };
-        self.refresh_info();
-        let msg = if self.game_running() {
-            Some("The game is still running.\n\nClose it, then click Try again.".to_string())
-        } else {
-            match self.info.iso.clone().filter(|_| self.info.iso_exists) {
-                Some(_) => None,
-                None => {
-                    let p = self.info.iso.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
-                    Some(format!("Your disc image was not found at:\n{p}\n\nPut it back where it was, or use Repair / rebuild (Settings, Advanced) to pick it again."))
-                }
-            }
-        };
+        // a backup is a finished copy of an old version: nothing ever updates it
+        let msg = if self.is_backup() { Some("A backup is never updated. Open your main install to update.".to_string()) } else { self.update_blocker() };
         if let Some(m) = msg {
             self.failure = Some(Failure { message: m, details: String::new(), log: String::new(), update: true });
             self.engine = None;
@@ -523,6 +541,10 @@ impl App {
     }
 
     pub fn cancel_run(&mut self) {
+        if self.backup.job.is_some() {
+            self.stop_backup();
+            return;
+        }
         if let Some(e) = self.engine.as_mut() {
             e.cancel();
         }
@@ -552,6 +574,12 @@ impl App {
         self.done_note = String::new();
         if let RunKind::Update { to, .. } = self.run_kind.clone() {
             self.done_note = format!("Updated to v{to}. Your saves and settings were kept.");
+            if let Some(e) = self.backup.made.as_deref().and_then(|id| self.library.get(id)) {
+                self.done_note.push_str(&format!(" Your old version is kept as \"{}\" in the Library.", e.name));
+            }
+            if !self.backup.left_out.is_empty() {
+                self.done_note.push_str(&format!(" The backup does not hold the texture pack(s) {} (this drive cannot share files).", self.backup.left_out.join(", ")));
+            }
         } else if self.shortcut_wanted && self.run_kind == RunKind::Install {
             self.done_note = self.make_shortcut_note();
         } else if self.run_kind == RunKind::Repair {
@@ -663,6 +691,7 @@ impl App {
     pub fn tick(&mut self, ctx: &egui::Context) -> bool {
         self.poll_picker();
         self.poll_disc();
+        self.poll_backup();
         self.poll_engine();
         self.poll_game(ctx);
         self.mods_poll();
@@ -673,6 +702,7 @@ impl App {
             }
         }
         let active = self.engine.is_some()
+            || self.backup.job.is_some()
             || self.disc_check.is_some()
             || self.disc_edit_at.is_some()
             || self.picker.is_some()

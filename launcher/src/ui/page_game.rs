@@ -38,6 +38,7 @@ impl App {
         } else {
             match self.view {
                 View::Run => self.show_run(ui),
+                View::Backup => self.show_backup_progress(ui),
                 View::Failed => self.show_failed(ui),
                 View::Done => self.show_done(ui),
                 View::Home | View::Repair => {
@@ -104,6 +105,9 @@ impl App {
     fn play_status_chips(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             theme::chip(ui, &format!("Version {}", self.info.local_version), theme::BLUE);
+            if self.is_backup() {
+                theme::chip(ui, "Backup", theme::ORANGE);
+            }
             if let Some(d) = self.info.disc {
                 theme::chip(ui, d.region, theme::MUTED);
             }
@@ -119,7 +123,7 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new("Your disc image was not found where it was during setup.").color(theme::RED));
                 ui.label(theme::muted("Use Repair / rebuild (Settings, Advanced) to pick it again."));
-                if theme::button(ui, "Repair / rebuild...") {
+                if !self.is_backup() && theme::button(ui, "Repair / rebuild...") {
                     self.goto_repair();
                 }
             });
@@ -174,6 +178,9 @@ impl App {
     }
 
     fn play_footer(&mut self, ui: &mut Ui) {
+        if self.is_backup() {
+            return;
+        }
         let st = self.update_state();
         ui.horizontal(|ui| {
             match &st {
@@ -189,20 +196,24 @@ impl App {
     }
 
     fn update_banner(&mut self, ui: &mut Ui) {
+        if self.is_backup() {
+            self.backup_note(ui);
+            return;
+        }
         let UpdateState::Available(offer) = self.update_state() else { return };
         let running = self.game_running();
         if self.is_pinned() {
             // an install the user put on an older version: no banner, only a plain button
-            let mut go = false;
             // the sentence wraps inside the page and the button sits under it (a one-line row ran off the page in a narrow window)
             ui.label(theme::muted(format!("This install stays on version {} (you chose it). Version {} is out.", offer.from, offer.to)));
-            go = theme::button_enabled(ui, &format!("Update to {}", offer.to), !running && !offer.finish);
-            if go {
+            let ready = self.backup_choice(ui, offer.finish);
+            self.backup_error_note(ui);
+            if theme::button_enabled(ui, &format!("Update to {}", offer.to), !running && !offer.finish && ready) {
                 if let Some(id) = self.cur_id.clone() {
                     self.library.set_pinned(&id, false);
                     self.save_library();
                 }
-                self.start_update(&offer.to, false);
+                self.begin_update(&offer.to, false);
             }
             return;
         }
@@ -233,13 +244,15 @@ impl App {
                     });
                 }
             }
-            go = theme::button_enabled(ui, if offer.finish { "Finish update" } else { "Update now" }, !running);
+            let ready = self.backup_choice(ui, offer.finish);
+            self.backup_error_note(ui);
+            go = theme::button_enabled(ui, if offer.finish { "Finish update" } else { "Update now" }, !running && ready);
             if running {
                 ui.label(theme::muted("Close the game first."));
             }
         });
         if go {
-            self.start_update(&offer.to, offer.finish);
+            self.begin_update(&offer.to, offer.finish);
         }
     }
 

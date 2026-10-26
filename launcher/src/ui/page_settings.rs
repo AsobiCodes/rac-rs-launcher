@@ -76,7 +76,7 @@ impl App {
     fn row_values(row: &Row) -> Vec<(&'static str, &'static str)> {
         match row.kind {
             Kind::Choice(list) => list.to_vec(),
-            Kind::Camera | Kind::CamSpeed => Vec::new(),
+            Kind::Camera | Kind::Percent => Vec::new(),
         }
     }
 
@@ -84,7 +84,7 @@ impl App {
         match row.kind {
             Kind::Choice(list) => list.iter().map(|(_, l)| *l).collect(),
             Kind::Camera => rows::CAMERA_LABELS.to_vec(),
-            Kind::CamSpeed => Vec::new(),
+            Kind::Percent => Vec::new(),
         }
     }
 
@@ -92,7 +92,7 @@ impl App {
         let total = ui.available_width();
         let labels = Self::row_labels(row);
         let need = match row.kind {
-            Kind::CamSpeed => f32::MAX,
+            Kind::Percent => f32::MAX,
             _ => theme::segmented_width(ui, &labels),
         };
         let stack = need > total * 0.5;
@@ -104,7 +104,7 @@ impl App {
         let locked: Vec<bool> = values.iter().map(|(v, _)| !gating::value_available(&self.info.local_version, row.key, v)).collect();
         let value_note = gating::value_needs_text(&self.info.local_version, row.key, &values);
         let mut control = |ui: &mut Ui, this: &App| match row.kind {
-            Kind::CamSpeed => speed = Self::camspeed_control(ui, this),
+            Kind::Percent => speed = Self::percent_control(ui, this, row),
             _ => picked = theme::segmented_gated(ui, row.key, row.label, &labels, rows::current_index(&this.options, row), &locked),
         };
         // an option this game version does not know yet: greyed, with the reason
@@ -136,27 +136,29 @@ impl App {
             self.save_options();
         }
         if let Some(s) = speed {
-            rows::set_camspeed(&mut self.options, s);
+            rows::set_percent(&mut self.options, row.key, s);
             self.save_options();
         }
     }
 
-    /// The camera speed slider and its "game's own" button. Returns the new value when the player changed it (Some(None) = back to default).
-    fn camspeed_control(ui: &mut Ui, this: &App) -> Option<Option<u32>> {
-        let cur = rows::camspeed(&this.options);
+    /// A percent row's slider (Camera speed, Mouse speed) and its "Use default" button. Returns the new value when the player changed it
+    /// (Some(None) = back to default). Camera speed's default is the game's own Slow / Medium / Fast row, Mouse speed's the row's 50.
+    fn percent_control(ui: &mut Ui, this: &App, row: &Row) -> Option<Option<u32>> {
+        let cur = rows::percent(&this.options, row.key);
         let mut out = None;
         ui.horizontal(|ui| {
-            let mut pct = cur.unwrap_or(50) as f32;
+            let mut pct = cur.unwrap_or(row.default.parse().unwrap_or(50)) as f32;
             ui.style_mut().visuals.selection.bg_fill = theme::ORANGE;
             ui.style_mut().spacing.slider_width = 220.0;
             let r = ui.add(egui::Slider::new(&mut pct, CAMSPEED_MIN as f32..=CAMSPEED_MAX as f32).step_by(10.0).show_value(false));
-            r.widget_info(|| egui::WidgetInfo::slider(true, pct as f64, "Camera speed"));
+            r.widget_info(|| egui::WidgetInfo::slider(true, pct as f64, row.label));
             if r.changed() {
                 out = Some(Some(pct.round() as u32));
             }
             let (txt, col) = match cur {
                 Some(p) => (format!("{p}%"), theme::TEXT),
-                None => ("Game's own setting".to_string(), theme::MUTED),
+                None if row.default.is_empty() => ("Game's own setting".to_string(), theme::MUTED),
+                None => (format!("Default ({}%)", row.default), theme::MUTED),
             };
             ui.label(RichText::new(txt).color(col).size(14.0));
             if cur.is_some() && theme::button(ui, "Use default") {
@@ -195,12 +197,14 @@ impl App {
                     }
                 }
             });
-            ui.separator();
-            ui.label(theme::bold("Repair / rebuild", 15.5));
-            ui.label(theme::muted("Makes the game code again from your disc and builds the game again (about 15 minutes). Use it if the game does not start after something went wrong. Your saves and settings are kept."));
-            if theme::button_enabled(ui, "Repair / rebuild...", !self.game_running()) {
-                self.tab = super::state::Tab::Play;
-                self.goto_repair();
+            if !self.is_backup() {
+                ui.separator();
+                ui.label(theme::bold("Repair / rebuild", 15.5));
+                ui.label(theme::muted("Makes the game code again from your disc and builds the game again (about 15 minutes). Use it if the game does not start after something went wrong. Your saves and settings are kept."));
+                if theme::button_enabled(ui, "Repair / rebuild...", !self.game_running()) {
+                    self.tab = super::state::Tab::Play;
+                    self.goto_repair();
+                }
             }
             ui.separator();
             ui.label(theme::bold("Reset settings", 15.5));

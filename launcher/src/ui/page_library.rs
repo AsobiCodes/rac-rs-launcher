@@ -55,11 +55,16 @@ impl App {
         let mut ask_remove = false;
         let mut remove = false;
         let mut cancel = false;
+        let mut ask_delete = false;
+        let mut delete = false;
         let edge = if current { theme::ORANGE } else { theme::LINE };
         theme::card_colored(ui, edge, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(theme::bold(g.title, 18.0));
+                ui.label(theme::bold(e.title(g), 18.0));
+                if e.backup {
+                    theme::chip(ui, "Backup", theme::ORANGE);
+                }
                 theme::chip(ui, &format!("Version {}", v.version), theme::BLUE);
                 if !v.exists {
                     theme::chip(ui, "Folder not found", theme::RED);
@@ -76,7 +81,13 @@ impl App {
             ui.label(theme::muted(format!("Added {}", e.added)));
             ui.label(theme::muted(crate::play::SAVES_HINT));
             ui.add_space(4.0);
-            if self.lib_ui.confirm_remove.as_deref() == Some(e.id.as_str()) {
+            if self.lib_ui.confirm_delete.as_deref() == Some(e.id.as_str()) {
+                ui.label(RichText::new("Delete this backup? Its folder goes to the Recycle Bin, with the saves that are in it. Your main install is not touched.").color(theme::TEXT));
+                ui.horizontal(|ui| {
+                    delete = theme::button(ui, "Yes, delete the backup");
+                    cancel = theme::button(ui, "Cancel");
+                });
+            } else if self.lib_ui.confirm_remove.as_deref() == Some(e.id.as_str()) {
                 ui.label(RichText::new("Remove this install from the list? Its files and saves stay on your disk.").color(theme::TEXT));
                 ui.horizontal(|ui| {
                     remove = theme::button(ui, "Yes, remove from list");
@@ -87,6 +98,9 @@ impl App {
                     open = theme::button_enabled(ui, if current { "Go to game" } else { "Open" }, v.exists);
                     reveal = theme::button_enabled(ui, "Show folder", v.exists);
                     saves = theme::button_enabled(ui, "Open saves folder", v.exists);
+                    if e.backup {
+                        ask_delete = theme::button(ui, "Delete backup");
+                    }
                     ask_remove = theme::button(ui, "Remove from list");
                 });
             }
@@ -105,8 +119,15 @@ impl App {
         if ask_remove {
             self.lib_ui.confirm_remove = Some(e.id.clone());
         }
+        if ask_delete {
+            self.lib_ui.confirm_delete = Some(e.id.clone());
+        }
+        if delete {
+            self.delete_backup(&e.id);
+        }
         if cancel {
             self.lib_ui.confirm_remove = None;
+            self.lib_ui.confirm_delete = None;
         }
         if remove {
             self.remove_install(&e.id);

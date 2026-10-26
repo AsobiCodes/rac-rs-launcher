@@ -3,6 +3,9 @@
 A small desktop app (Rust, egui) that installs, updates, configures and starts the PC port of Ratchet & Clank from
 [AsobiCodes/rac-rs](https://github.com/AsobiCodes/rac-rs). Bring your own disc: the game is built on your PC from your own disc image; nothing of the game is shipped here.
 
+The game itself (download, changelog, bug reports): https://github.com/AsobiCodes/rac-rs
+Project site: https://asobicodes.dev
+
 ## Download
 Get `rac-rs-launcher-windows-x64.exe` from the [Releases](../../releases) page (the release shows its SHA-256) and double-click it.
 The launcher checks for a new launcher and a new game version and asks before it installs either. It updates itself only from this repo.

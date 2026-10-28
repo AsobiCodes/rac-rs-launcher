@@ -1,7 +1,7 @@
 # Changelog
 
 ## v0.1.2
-- New: Linux (x86-64; it should also work on a Steam Deck). Install the game with one click: the launcher downloads the game release, asks for your own disc image (.iso, PAL or USA v1.00) and builds it with the game's own setup.sh. No programming tools and no sudo are needed. Needs game version 0.4.1 or newer on Linux. Not yet tried on a real Steam Deck, please report what you find.
+- New: Linux (x86-64). Install the game with one click: the launcher downloads the game release, asks for your own disc image (.iso, PAL or USA v1.00) and builds it with the game's own setup.sh. No programming tools and no sudo are needed. Needs game version 0.4.1 or newer on Linux. Linux support is new, so please report what you find.
 - The Linux launcher updates itself like the Windows one, keeps several game versions side by side, makes the same backup before an update, and adds an entry for the game to the application menu. Where the system has no file dialog (zenity or kdialog) you type the path to the disc instead of using Browse. The setup page has a tick to use the system's own Rust tools instead of the ones the game downloads.
 - Linux: when the game's setup stops, the launcher shows the real reason from setup.sh (a missing system library with the install line for your distribution, a drive that cannot run programs, no internet, and so on) instead of a general internet hint. Cancel stops the whole setup, including the programs it started.
 - A backup made on Linux keeps working: the backup's disc path is made absolute, so the backup plays with its own saves and settings straight away.

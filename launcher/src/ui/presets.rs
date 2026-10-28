@@ -65,6 +65,27 @@ pub const TABLE: &[(&str, [&str; 3])] = &[
     ("texfilter", ["smooth", "smooth", "smooth"]),
 ];
 
+/// Culling (the game skips drawing what is out of view) is On in every preset. It has no row on the Settings page and no column in `TABLE`:
+/// the game reads a missing key as On, so a preset removes the key (also a hand-written `culling=off`), like any other value equal to the default.
+const CULLING: &str = "culling";
+/// MARKER KEY of a deliberate Culling Off (v0.4.1 game: `culling=off` without this line is read as On). TO MATCH THE GAME'S FINAL KEY: change
+/// only this constant. The launcher has no Culling control, so it never writes the marker; it keeps the line untouched on save (an unknown
+/// line) and a preset, which sets Culling On, removes it.
+pub const CULLING_MARKER_KEY: &str = "culling_off";
+/// The first game version that reads a `culling=off` WITHOUT the marker as On (the one-time v0.4.0 reset). An install's VERSION is
+/// always a plain x.y.z (`games::local_version` turns anything else into 0.1.0, so an "-rc" name never gets here). Older games (0.3.0 .. 0.4.0) take `culling=off` as a real Off.
+const CULLING_RESET_VERSION: &str = "0.4.1";
+
+/// True when the game at `version` runs the options with Culling Off: `culling=off`, and, from the reset version on, the marker too.
+/// The game itself rewrites a marker-less Off as On at its next start; until then the launcher reads it the same way.
+pub fn culling_off(o: &Options, version: &str) -> bool {
+    if !gating::available(version, CULLING) || o.get(CULLING) != Some("off") {
+        return false;
+    }
+    crate::update::compare_version(version, CULLING_RESET_VERSION) == std::cmp::Ordering::Less
+        || o.extra(CULLING_MARKER_KEY).is_some_and(|v| v.eq_ignore_ascii_case("kept"))
+}
+
 fn default_of(key: &str) -> Option<&'static str> {
     rows::ROWS.iter().find(|r| r.key == key).map(|r| r.default)
 }
@@ -85,7 +106,7 @@ fn effective(version: &str, key: &str, value: &'static str) -> Option<&'static s
     Some(SCALE[i])
 }
 
-/// Sets the options of `preset` (Custom changes nothing). A value equal to the game's default removes the key, so High leaves the file as
+/// Sets the options of `preset` (Custom changes nothing), and Culling On (the key is removed). A value equal to the game's default removes the key, so High leaves the file as
 /// it would be with no options at all for these keys.
 pub fn apply(o: &mut Options, version: &str, preset: Preset) {
     let Some(col) = preset.column() else { return };
@@ -93,15 +114,21 @@ pub fn apply(o: &mut Options, version: &str, preset: Preset) {
         let Some(v) = effective(version, key, values[col]) else { continue };
         o.set(key, if default_of(key) == Some(v) { None } else { Some(v) });
     }
+    if gating::available(version, CULLING) {
+        o.set(CULLING, None);
+        o.remove_extra(CULLING_MARKER_KEY);
+    }
 }
 
-/// True when every option of the preset that this game version knows has the preset's value (a key never set counts as the default).
+/// True when every option of the preset that this game version knows has the preset's value (a key never set counts as the default; a
+/// file that runs Culling Off, see `culling_off`, matches no preset).
 pub fn matches(o: &Options, version: &str, preset: Preset) -> bool {
     let Some(col) = preset.column() else { return false };
-    TABLE.iter().all(|(key, values)| match effective(version, key, values[col]) {
-        Some(v) => o.get(key).or_else(|| default_of(key)) == Some(v),
-        None => true,
-    })
+    !culling_off(o, version)
+        && TABLE.iter().all(|(key, values)| match effective(version, key, values[col]) {
+            Some(v) => o.get(key).or_else(|| default_of(key)) == Some(v),
+            None => true,
+        })
 }
 
 /// The preset the options are: High first (the game's default), then Medium, then Low; Custom when none matches.
@@ -156,7 +183,7 @@ mod tests {
             let row = rows::ROWS.iter().find(|r| r.key == k).unwrap();
             assert!(matches!(row.group, Group::Graphics | Group::Enhanced), "{k}");
         }
-        for never in ["camera", "camfeel", "camspeed", "mousespeed", "strafe", "lockon", "buyall", "lang", "renderer", "display", "debug", "culling", "keys", "pad"] {
+        for never in ["camera", "camfeel", "camspeed", "mousespeed", "strafe", "lockon", "buyall", "lang", "renderer", "display", "debug", "keys", "pad"] {
             assert!(!keys().contains(&never), "{never} must not be part of a preset");
         }
         let mut seen = keys();
@@ -251,6 +278,60 @@ mod tests {
         assert!(version_note("0.2.2").unwrap().contains("0.2.2"));
         assert_eq!(p.get("fog"), None, "fog is unknown to 0.3.0");
         assert!(version_note("0.4.0").is_none() && version_note("0.3.0").is_some());
+    }
+
+    #[test]
+    fn every_preset_sets_culling_on() {
+        for preset in [Preset::Low, Preset::Medium, Preset::High] {
+            let mut o = Options::parse("version=1\nculling=off\n");
+            assert_eq!(o.get("culling"), Some("off"));
+            assert!(!matches(&o, "0.4.0", preset), "culling=off matches no preset");
+            apply(&mut o, "0.4.0", preset);
+            assert_eq!(o.get("culling"), None, "{preset:?}: the key is gone, the game reads a missing culling as On");
+            assert!(!o.to_text().contains("culling"));
+            assert_eq!(detect(&o, "0.4.0"), preset);
+        }
+        // a version that does not know Culling keeps its line untouched
+        let mut old = Options::parse("culling=off\n");
+        apply(&mut old, "0.2.2", Preset::Low);
+        assert_eq!(old.get("culling"), Some("off"), "0.2.2 does not know culling: the line is left alone");
+        assert!(old.to_text().contains("culling=off"));
+        assert_eq!(detect(&old, "0.2.2"), Preset::Low);
+        // the marker of a deliberate Off is an unknown line: kept on save, removed by a preset
+        let mut m = Options::parse("culling=off\nculling_off=kept\nfuture=1\n");
+        assert_eq!(m.extra(CULLING_MARKER_KEY), Some("kept"));
+        assert_eq!(Options::parse(&m.to_text()).to_text(), m.to_text(), "a launcher save keeps culling=off and the marker");
+        assert!(m.to_text().contains("culling_off=kept") && m.to_text().contains("culling=off"));
+        m.set("ao", Some("low"));
+        assert!(m.to_text().contains("culling_off=kept"), "changing another option keeps the marker");
+        apply(&mut m, "0.4.0", Preset::High);
+        assert!(!m.to_text().contains("culling"), "a preset sets Culling On: both lines gone");
+        assert!(m.to_text().contains("future=1"));
+        // the table itself never lists it, and High with culling off in the file is Custom
+        assert!(!keys().contains(&"culling"));
+        assert_eq!(detect(&Options::parse("culling=off\n"), "0.4.0"), Preset::Custom);
+    }
+
+    /// From 0.4.1 on a `culling=off` without the marker is a v0.4.0 leftover that the game reads (and rewrites) as On, so it is no
+    /// reason for Custom; with the marker (case-insensitive value) it is a deliberate Off. 0.4.0 itself has no marker: a real Off.
+    #[test]
+    fn a_markerless_culling_off_reads_as_on_from_the_reset_version() {
+        let plain = Options::parse("culling=off\n");
+        let marked = Options::parse("culling=off\nculling_off=kept\n");
+        let shouting = Options::parse("culling=off\nculling_off=KEPT\n");
+        let wrong = Options::parse("culling=off\nculling_off=nope\n");
+        for v in ["0.4.1", "0.4.10", "0.5.0"] {
+            assert!(!culling_off(&plain, v), "{v}: no marker, On");
+            assert_eq!(detect(&plain, v), Preset::High, "{v}: the file is High");
+            assert!(culling_off(&marked, v) && culling_off(&shouting, v), "{v}: marker, Off");
+            assert_eq!(detect(&marked, v), Preset::Custom);
+            assert_eq!(detect(&shouting, v), Preset::Custom);
+            assert!(!culling_off(&wrong, v));
+        }
+        assert!(culling_off(&plain, "0.4.0") && culling_off(&plain, "0.3.0"), "older games take the line as a real Off");
+        assert_eq!(detect(&plain, "0.4.0"), Preset::Custom);
+        assert!(!culling_off(&plain, "0.2.2"), "a game that does not know Culling");
+        assert!(!culling_off(&Options::parse("culling=on\nculling_off=kept\n"), "0.4.1"));
     }
 
     #[test]

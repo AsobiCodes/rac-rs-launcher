@@ -274,7 +274,8 @@ mod tests {
     fn launcher_update_end_to_end_with_dry_restart() {
         let rel = scratch("lrel");
         let home = scratch("lhome");
-        releases::write_test_release(&rel, "v9.0.0", "- shiny", &[(selfupdate::ASSET_NAME, b"NEW LAUNCHER")], &good);
+        let new_bytes = selfupdate::test_launcher_bytes(b"NEW LAUNCHER");
+        releases::write_test_release(&rel, "v9.0.0", "- shiny", &[(selfupdate::ASSET_NAME, new_bytes.as_slice())], &good);
         let exe = home.join("RAC-RS Launcher.exe");
         std::fs::write(&exe, b"OLD LAUNCHER").unwrap();
         let mut app = App::new(home.join("data"), None);
@@ -290,7 +291,7 @@ mod tests {
         let exe2 = app.restart_exe.take().unwrap();
         app.do_restart(&exe2);
         assert_eq!(app.net.restart_log.as_deref(), Some(exe.as_path()));
-        assert_eq!(std::fs::read(&exe).unwrap(), b"NEW LAUNCHER");
+        assert_eq!(std::fs::read(&exe).unwrap(), new_bytes);
         assert_eq!(std::fs::read(selfupdate::old_path(&exe)).unwrap(), b"OLD LAUNCHER");
         // the next start deletes the old exe next to the exe, not in the data folder
         assert!(selfupdate::remove_old(&exe) && !selfupdate::old_path(&exe).exists());
@@ -383,10 +384,10 @@ mod tests {
             }
             z.into_inner()
         };
-        let (z31, z22) = (zip_for("0.3.1"), zip_for("0.2.2"));
-        releases::write_test_release(&rel, "v0.3.1", "", &[("rac-rs-0.3.1.zip", &z31)], &good);
+        let (z31, z22) = (zip_for("0.4.2"), zip_for("0.4.1"));
+        releases::write_test_release(&rel, "v0.4.2", "", &[("rac-rs-0.4.2.zip", &z31)], &good);
         let a = std::fs::read_to_string(rel.join("latest.json")).unwrap();
-        releases::write_test_release(&rel, "v0.2.2", "", &[("rac-rs-0.2.2.zip", &z22)], &good);
+        releases::write_test_release(&rel, "v0.4.1", "", &[("rac-rs-0.4.1.zip", &z22)], &good);
         let b = std::fs::read_to_string(rel.join("latest.json")).unwrap();
         std::fs::write(rel.join("releases.json"), format!("[{a},{b}]")).unwrap();
         let data = home.join("data");
@@ -400,21 +401,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let v: Vec<String> = app.installable_versions().iter().map(|i| i.version.clone()).collect();
-        assert_eq!(v, ["0.3.1", "0.2.2"]);
-        assert_eq!(app.picked_version().as_deref(), Some("0.3.1")); // default = newest
-        app.net.pick = Some("0.2.2".into());
-        assert_eq!(app.picked_version().as_deref(), Some("0.2.2"));
-        let dest = home.join("Ratchet & Clank 0.2.2");
+        assert_eq!(v, ["0.4.2", "0.4.1"]);
+        assert_eq!(app.picked_version().as_deref(), Some("0.4.2")); // default = newest
+        app.net.pick = Some("0.4.1".into());
+        assert_eq!(app.picked_version().as_deref(), Some("0.4.1"));
+        let dest = home.join("Ratchet & Clank 0.4.1");
         app.start_game_download(dest.clone(), app.picked_version()).unwrap();
         wait(&mut app, |a| !a.downloading());
-        assert_eq!(app.info.local_version, "0.2.2");
+        assert_eq!(app.info.local_version, "0.4.1");
         assert!(app.is_pinned());
         // restart: the pin is read back from library.json
         let lib = crate::library::Library::load(&data);
         assert!(lib.find_folder(&dest).unwrap().pinned);
         // the newest is not pinned
         let dest2 = home.join("newest");
-        app.start_game_download(dest2.clone(), Some("0.3.1".into())).unwrap();
+        app.start_game_download(dest2.clone(), Some("0.4.2".into())).unwrap();
         wait(&mut app, |a| !a.downloading());
         assert!(!app.is_pinned());
         let _ = std::fs::remove_dir_all(&rel);

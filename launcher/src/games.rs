@@ -39,8 +39,8 @@ pub const GAMES: &[GameDef] = &[
         title: "Ratchet & Clank",
         short: "R&C 1",
         discs: &RAC1_DISCS,
-        exe: "build\\release\\rac-rs.exe",
-        options: "player\\pc_options.txt",
+        exe: "build/release/rac-rs.exe",
+        options: "player/pc_options.txt",
         mods: "mods",
         visible: true,
         supported: true,
@@ -51,9 +51,9 @@ pub const GAMES: &[GameDef] = &[
         title: "Ratchet & Clank 2",
         short: "R&C 2",
         discs: &[],
-        exe: "rac2\\build\\release\\rac-rs-2.exe",
-        options: "rac2\\player\\pc_options.txt",
-        mods: "rac2\\mods",
+        exe: "rac2/build/release/rac-rs-2.exe",
+        options: "rac2/player/pc_options.txt",
+        mods: "rac2/mods",
         visible: true,
         supported: false,
         tagline: "Coming soon.",
@@ -63,9 +63,9 @@ pub const GAMES: &[GameDef] = &[
         title: "Ratchet & Clank 3",
         short: "R&C 3",
         discs: &[],
-        exe: "rac3\\build\\release\\rac-rs-3.exe",
-        options: "rac3\\player\\pc_options.txt",
-        mods: "rac3\\mods",
+        exe: "rac3/build/release/rac-rs-3.exe",
+        options: "rac3/player/pc_options.txt",
+        mods: "rac3/mods",
         visible: false,
         supported: false,
         tagline: "",
@@ -81,18 +81,41 @@ impl GameDef {
         self.discs.iter().find(|d| d.serial.eq_ignore_ascii_case(serial))
     }
 
+    /// The game exe: `.exe` on Windows, without the extension elsewhere.
     pub fn exe_path(&self, root: &Path) -> PathBuf {
-        root.join(self.exe)
+        root.join(native(&exe_name_for(cfg!(windows), self.exe)))
     }
 
     pub fn options_path(&self, root: &Path) -> PathBuf {
-        root.join(self.options)
+        root.join(native(self.options))
     }
 
     pub fn mods_dir(&self, root: &Path) -> PathBuf {
-        root.join(self.mods)
+        root.join(self.mods_rel())
+    }
+
+    /// The mods folder relative to the install, with this system's separators.
+    pub fn mods_rel(&self) -> PathBuf {
+        native(self.mods)
     }
 }
+
+/// A table path written with `/` as a path with this system's separators.
+fn native(s: &str) -> PathBuf {
+    s.split('/').collect()
+}
+
+/// The table's exe name for a system: Windows keeps `.exe`, other systems drop it.
+pub fn exe_name_for(windows: bool, exe: &str) -> String {
+    if windows {
+        exe.to_string()
+    } else {
+        exe.strip_suffix(".exe").unwrap_or(exe).to_string()
+    }
+}
+
+/// The script that starts the game from the install root (the "installed" test looks for it): `Play.cmd` / `play.sh`.
+pub const PLAY_SCRIPT: &str = if cfg!(windows) { "Play.cmd" } else { "play.sh" };
 
 pub fn visible_games() -> impl Iterator<Item = &'static GameDef> {
     GAMES.iter().filter(|g| g.visible)
@@ -136,27 +159,55 @@ pub fn local_version(root: &Path) -> String {
     read_trim(&root.join("VERSION")).filter(|v| is_version(v)).unwrap_or_else(|| "0.1.0".to_string())
 }
 
-/// Setup's own test (Test-Installed): the game exe, Play.cmd and generated\play.cfg exist.
+/// Setup's own test (Test-Installed): the game exe, the play script (Play.cmd / play.sh) and generated\play.cfg exist.
 pub fn is_installed(root: &Path, game: &GameDef) -> bool {
-    game.exe_path(root).is_file() && root.join("Play.cmd").is_file() && root.join("generated").join("play.cfg").is_file()
+    game.exe_path(root).is_file() && root.join(PLAY_SCRIPT).is_file() && root.join("generated").join("play.cfg").is_file()
 }
 
-/// Get-InstalledIso: `iso=` of generated\play.cfg, else `set "ORACLE_ISO=..."` of Play.cmd.
+/// Get-InstalledIso: `iso=` of generated\play.cfg, else `set "ORACLE_ISO=..."` of Play.cmd. A relative path (setup.sh writes `rom/x.iso`
+/// for a disc inside the game folder) belongs to the install root, never to the launcher's working directory.
 pub fn installed_iso(root: &Path) -> Option<PathBuf> {
+    let from_root = |v: &str| {
+        let p = PathBuf::from(v);
+        if v.is_empty() {
+            p
+        } else if p.is_relative() {
+            root.join(p)
+        } else {
+            p
+        }
+    };
     if let Some(t) = read_trim(&root.join("generated").join("play.cfg")) {
         for l in t.lines() {
             if let Some(v) = l.strip_prefix("iso=") {
-                return Some(PathBuf::from(v.trim()));
+                return Some(from_root(v.trim()));
             }
         }
     }
     let t = read_trim(&root.join("Play.cmd"))?;
     for l in t.lines() {
         if let Some(v) = l.trim().strip_prefix("set \"ORACLE_ISO=") {
-            return Some(PathBuf::from(v.trim_end_matches('"')));
+            return Some(from_root(v.trim_end_matches('"')));
         }
     }
     None
+}
+
+/// Linux: the folder's setup.sh must speak the launcher's protocol (`--apply-update`, `--pinned-toolchain`: setup.sh of 0.4.1 and newer).
+/// An older tree would treat the switches as a disc path and fail, or ignore `--apply-update`, rebuild the old version and report success.
+/// None = fine (also on Windows, and when there is no setup.sh at all: the engine says so).
+pub fn contract_problem(windows: bool, root: &Path) -> Option<String> {
+    if windows {
+        return None;
+    }
+    let t = std::fs::read(root.join(crate::library::SETUP_SCRIPT)).ok()?;
+    let t = String::from_utf8_lossy(&t);
+    (!(t.contains("--apply-update") && t.contains("--pinned-toolchain"))).then(|| {
+        format!(
+            "This copy of the game is from before the Linux setup that the launcher needs (RAC-RS {} or newer), so the launcher cannot install, update or repair it.\n\nInstall the newest version in a new folder instead (Library > make a new install > Download the game).",
+            crate::game_dl::MIN_INSTALLABLE_LINUX
+        )
+    })
 }
 
 pub fn detect(root: &Path, game: &GameDef) -> InstallInfo {
@@ -212,15 +263,16 @@ mod tests {
         let g = game_by_id("rac1").unwrap();
         std::fs::create_dir_all(d.join("build/release")).unwrap();
         std::fs::create_dir_all(d.join("generated")).unwrap();
-        std::fs::write(d.join("build/release/rac-rs.exe"), b"x").unwrap();
-        std::fs::write(d.join("Play.cmd"), b"x").unwrap();
-        std::fs::write(d.join("generated/play.cfg"), "iso=C:\\games\\rc.iso\n").unwrap();
+        std::fs::write(d.join("build/release").join(exe_name_for(cfg!(windows), "rac-rs.exe")), b"x").unwrap();
+        std::fs::write(d.join(PLAY_SCRIPT), b"x").unwrap();
+        let abs_iso = if cfg!(windows) { "C:\\games\\rc.iso" } else { "/games/rc.iso" };
+        std::fs::write(d.join("generated/play.cfg"), format!("iso={abs_iso}\n")).unwrap();
         std::fs::write(d.join("VERSION"), "0.4.0\n").unwrap();
         let i = detect(&d, g);
         assert!(i.installed);
         assert_eq!(i.built_version, "0.1.0", "no built_version.txt: built before versions existed");
         assert!(i.finish_pending());
-        assert_eq!(i.iso.as_deref(), Some(Path::new("C:\\games\\rc.iso")));
+        assert_eq!(i.iso.as_deref(), Some(Path::new(abs_iso)));
         assert!(!i.iso_exists);
         std::fs::write(d.join("generated/built_version.txt"), "0.4.0\n").unwrap();
         assert!(!detect(&d, g).finish_pending());
@@ -229,8 +281,81 @@ mod tests {
     #[test]
     fn iso_falls_back_to_play_cmd() {
         let d = scratch("playcmd");
-        std::fs::write(d.join("Play.cmd"), "@echo off\r\nset \"ORACLE_ISO=D:\\x y\\rc.iso\"\r\n").unwrap();
-        assert_eq!(installed_iso(&d).as_deref(), Some(Path::new("D:\\x y\\rc.iso")));
+        let abs_iso = if cfg!(windows) { "D:\\x y\\rc.iso" } else { "/x y/rc.iso" };
+        std::fs::write(d.join("Play.cmd"), format!("@echo off\r\nset \"ORACLE_ISO={abs_iso}\"\r\n")).unwrap();
+        assert_eq!(installed_iso(&d).as_deref(), Some(Path::new(abs_iso)));
+    }
+
+    #[test]
+    fn linux_setup_scripts_must_speak_the_launchers_protocol() {
+        let d = scratch("contract");
+        // no setup.sh: not this check's business (the engine reports a missing script)
+        assert_eq!(contract_problem(false, &d), None);
+        std::fs::write(d.join(crate::library::SETUP_SCRIPT), "#!/bin/sh\n# old: setup.sh --iso X\n").unwrap();
+        let m = contract_problem(false, &d).unwrap();
+        assert!(m.contains("0.4.1") && m.contains("new folder"), "{m}");
+        assert_eq!(contract_problem(true, &d), None, "Windows is never asked");
+        std::fs::write(d.join(crate::library::SETUP_SCRIPT), "case $1 in --apply-update) ;; --pinned-toolchain) ;; esac\n").unwrap();
+        assert_eq!(contract_problem(false, &d), None);
+    }
+
+    #[test]
+    fn a_relative_iso_belongs_to_the_install_root() {
+        // setup.sh writes `iso=rom/x.iso` for a disc inside the game folder (review B2): the launcher's own working directory never counts
+        let d = scratch("reliso");
+        let g = game_by_id("rac1").unwrap();
+        std::fs::create_dir_all(d.join("build/release")).unwrap();
+        std::fs::create_dir_all(d.join("generated")).unwrap();
+        std::fs::create_dir_all(d.join("rom")).unwrap();
+        std::fs::write(g.exe_path(&d), b"x").unwrap();
+        std::fs::write(d.join(PLAY_SCRIPT), b"x").unwrap();
+        std::fs::write(d.join("rom").join("x.iso"), b"disc").unwrap();
+        std::fs::write(d.join("generated/play.cfg"), "iso=rom/x.iso\n").unwrap();
+        assert_eq!(installed_iso(&d), Some(d.join("rom/x.iso")));
+        let i = detect(&d, g);
+        assert!(i.iso_exists, "the disc inside the folder is found: {:?}", i.iso);
+        assert_eq!(i.iso, Some(d.join("rom/x.iso")));
+        // an absolute path stays as it is
+        let abs = d.join("elsewhere.iso");
+        std::fs::write(d.join("generated/play.cfg"), format!("iso={}\n", abs.display())).unwrap();
+        assert_eq!(installed_iso(&d), Some(abs));
+        // an empty value stays empty (nothing to find)
+        std::fs::write(d.join("generated/play.cfg"), "iso=\n").unwrap();
+        assert_eq!(installed_iso(&d), Some(PathBuf::new()));
+    }
+
+    #[test]
+    fn paths_use_this_systems_separators_and_exe_name() {
+        let g = game_by_id("rac1").unwrap();
+        let r = Path::new("root");
+        let exe = g.exe_path(r);
+        assert_eq!(exe, r.join("build").join("release").join(if cfg!(windows) { "rac-rs.exe" } else { "rac-rs" }));
+        assert_eq!(g.options_path(r), r.join("player").join("pc_options.txt"));
+        assert_eq!(g.mods_dir(r), r.join("mods"));
+        let g2 = game_by_id("rac2").unwrap();
+        assert_eq!(g2.mods_dir(r), r.join("rac2").join("mods"));
+        assert_eq!(g2.mods_rel(), Path::new("rac2").join("mods"));
+        // the table never holds a backslash
+        for g in GAMES {
+            assert!(!g.exe.contains('\\') && !g.options.contains('\\') && !g.mods.contains('\\'), "{}", g.id);
+        }
+        assert_eq!(exe_name_for(true, "rac2/build/release/rac-rs-2.exe"), "rac2/build/release/rac-rs-2.exe");
+        assert_eq!(exe_name_for(false, "rac2/build/release/rac-rs-2.exe"), "rac2/build/release/rac-rs-2");
+    }
+
+    #[test]
+    fn installed_needs_the_play_script_of_this_system() {
+        let d = scratch("playscript");
+        let g = game_by_id("rac1").unwrap();
+        std::fs::create_dir_all(d.join("build/release")).unwrap();
+        std::fs::create_dir_all(d.join("generated")).unwrap();
+        std::fs::write(g.exe_path(&d), b"x").unwrap();
+        std::fs::write(d.join("generated/play.cfg"), "iso=x\n").unwrap();
+        // the other system's script does not count
+        std::fs::write(d.join(if cfg!(windows) { "play.sh" } else { "Play.cmd" }), b"x").unwrap();
+        assert!(!is_installed(&d, g));
+        std::fs::write(d.join(PLAY_SCRIPT), b"x").unwrap();
+        assert!(is_installed(&d, g));
     }
 
     #[test]

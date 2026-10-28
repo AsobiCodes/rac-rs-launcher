@@ -16,6 +16,7 @@ sys.exit(subprocess.call([r'$zig', 'cc', '-target', 'x86_64-linux-gnu'] + args))
 Set-Content -LiteralPath (Join-Path $tools 'zigcc.py') -Encoding ascii -Value $py
 Set-Content -LiteralPath (Join-Path $tools 'cc.cmd') -Encoding ascii -Value "@python `"%~dp0zigcc.py`" %*"
 Set-Content -LiteralPath (Join-Path $tools 'ar.cmd') -Encoding ascii -Value "@`"$zig`" ar %*"
+$ErrorActionPreference = 'Continue'   # native tools print progress on stderr; the exit code decides below
 & rustup target add x86_64-unknown-linux-gnu
 $env:RUSTC_WRAPPER = ''
 $env:CC_x86_64_unknown_linux_gnu = Join-Path $tools 'cc.cmd'

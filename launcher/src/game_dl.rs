@@ -1,6 +1,6 @@
 //! Download of the game for a new install: the latest RAC-RS RELEASE (never the main branch) of AsobiCodes/rac-rs, asset `rac-rs-<VER>.zip`,
 //! unpacked into the chosen folder. The zip holds one top folder `rac-rs-<VER>/`; it is stripped. Entries that would leave the folder are refused.
-//! The disc setup (setup.ps1 through the engine) is NOT done here: the folder is added to the library and the normal flow takes over.
+//! The disc setup (the setup script, setup.ps1 or setup.sh, through the engine) is NOT done here: the folder is added to the library and the normal flow takes over.
 use crate::library;
 use crate::releases::{self, Asset, Release, ReleaseError, ReleaseSource, Transfer};
 use std::fs::File;
@@ -14,9 +14,31 @@ pub const STAGE_LOOKUP: u8 = 0;
 pub const STAGE_DOWNLOAD: u8 = 1;
 pub const STAGE_UNPACK: u8 = 2;
 
-/// The oldest game version the launcher installs: every release from 0.2.1 on has a zip with a checksum and a setup.ps1 that takes -Console -Iso
+/// The oldest game version the launcher installs: every release from 0.2.1 on has a zip with a checksum and a setup script (setup.ps1 or setup.sh) that takes -Console -Iso
 /// -SkipHash -NoShortcut (0.2.0 and 0.1.x are tags only).
 pub const MIN_INSTALLABLE: &str = "0.2.1";
+/// Linux: the first release whose setup.sh speaks the launcher's protocol (--apply-update, --finish-only, --pinned-toolchain ...). Older zips
+/// need the system's Rust and -dev packages and would fail, or (an ignored --apply-update) rebuild the old version and report success.
+pub const MIN_INSTALLABLE_LINUX: &str = "0.4.1";
+
+/// The oldest installable version on this system.
+pub fn min_installable(windows: bool) -> &'static str {
+    if windows {
+        MIN_INSTALLABLE
+    } else {
+        MIN_INSTALLABLE_LINUX
+    }
+}
+
+/// A clear message when `version` is older than the Linux setup of RAC-RS (None = fine). Windows: never (its lookup and list rules stay as they were).
+pub fn too_old_message(windows: bool, version: &str) -> Option<String> {
+    if windows {
+        return None;
+    }
+    let min = MIN_INSTALLABLE_LINUX;
+    (crate::update::compare_version(version, min) == std::cmp::Ordering::Less)
+        .then(|| format!("Version {version} cannot be installed on Linux: the Linux setup of RAC-RS starts with version {min}. Pick version {min} or newer."))
+}
 
 /// One line of the version picker.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,10 +51,16 @@ pub struct Installable {
 
 /// The versions that can be installed, newest first: no drafts, prereleases only with `show_test`, a `rac-rs-<ver>.zip` with a sha256 digest, >= MIN_INSTALLABLE.
 pub fn installable(list: &[Release], show_test: bool) -> Vec<Installable> {
+    installable_for(cfg!(windows), list, show_test)
+}
+
+/// `installable` for either system (tests check both on any host).
+pub fn installable_for(windows: bool, list: &[Release], show_test: bool) -> Vec<Installable> {
+    let min = min_installable(windows);
     let mut v: Vec<Installable> = list
         .iter()
         .filter(|r| !r.draft && (show_test || !r.prerelease))
-        .filter(|r| crate::update::compare_version(&r.version(), MIN_INSTALLABLE) != std::cmp::Ordering::Less)
+        .filter(|r| crate::update::compare_version(&r.version(), min) != std::cmp::Ordering::Less)
         .filter(|r| r.asset(&format!("rac-rs-{}.zip", r.version())).map(|a| releases::digest_hex(a).is_some()).unwrap_or(false))
         .map(|r| Installable { version: r.version(), date: r.date(), prerelease: r.prerelease, notes: r.notes() })
         .collect();
@@ -100,6 +128,9 @@ pub fn game_asset(r: &Release) -> Option<&Asset> {
 /// Looks up the release, downloads the zip into `<dest>/.racl_download/`, unpacks it into `dest`, removes the zip. Returns the version.
 pub fn run(src: &ReleaseSource, dest: &Path, want: Option<&str>, t: &Transfer, stage: &AtomicU8, version: &Mutex<String>) -> Result<String, ReleaseError> {
     stage.store(STAGE_LOOKUP, Ordering::Relaxed);
+    if let Some(m) = want.and_then(|v| too_old_message(cfg!(windows), v)) {
+        return Err(ReleaseError::Bad(m));
+    }
     let rel = match want {
         None => src.latest()?,
         Some(v) => src.list()?.into_iter().find(|r| !r.draft && r.version() == v).ok_or(ReleaseError::NotFound)?,
@@ -228,7 +259,46 @@ fn unpack_entries(ar: &mut zip::ZipArchive<File>, dest: &Path, top: Option<&str>
             done += n as u64;
             t.done.store(done, Ordering::Relaxed);
         }
+        drop(out);
+        set_exec_bits(&target, e.unix_mode(), &name)?;
     }
+    Ok(())
+}
+
+/// Linux: a zip keeps the file mode of each entry; setup.sh and friends must stay runnable.
+/// The stored mode is cut to `& 0o755` (a zip made on Windows by Python or 7-Zip often stores 0666 / 0777, which must not make the game files
+/// writable for everybody); entries without a stored mode get 0644, and every `.sh` script is made 0755 either way.
+/// A file system that refuses chmod (CIFS / FUSE mounts) is not an error for ordinary files; for a `.sh` it is only when the file is not
+/// runnable anyway. On Windows files carry no mode: nothing to do.
+#[cfg(unix)]
+fn unix_file_mode(mode: Option<u32>, name: &str) -> u32 {
+    let m = mode.map(|m| m & 0o755).unwrap_or(0o644);
+    if name.ends_with(".sh") {
+        m | 0o755
+    } else {
+        m
+    }
+}
+
+#[cfg(unix)]
+fn set_exec_bits(target: &Path, mode: Option<u32>, name: &str) -> Result<(), ReleaseError> {
+    use std::os::unix::fs::PermissionsExt;
+    let m = unix_file_mode(mode, name);
+    match std::fs::set_permissions(target, std::fs::Permissions::from_mode(m)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let runnable = std::fs::metadata(target).map(|md| md.permissions().mode() & 0o111 != 0).unwrap_or(false);
+            if !name.ends_with(".sh") || runnable {
+                Ok(())
+            } else {
+                Err(releases::io_error(&e))
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn set_exec_bits(_target: &Path, _mode: Option<u32>, _name: &str) -> Result<(), ReleaseError> {
     Ok(())
 }
 
@@ -302,10 +372,11 @@ mod tests {
     fn release_zip_is_downloaded_unpacked_and_cleaned() {
         let rel = scratch("rel");
         let dest = scratch("dest").join("game");
+        let script = format!("rac-rs-9.9.9/{}", library::SETUP_SCRIPT);
         let zip = make_zip(&[
             ("rac-rs-9.9.9/", b""),
             ("rac-rs-9.9.9/VERSION", b"9.9.9\n"),
-            ("rac-rs-9.9.9/setup.ps1", b"# setup"),
+            (script.as_str(), b"# setup"),
             ("rac-rs-9.9.9/oracle/stubs.txt", b"stub"),
         ]);
         releases::write_test_release(&rel, "v9.9.9", "notes", &[("rac-rs-9.9.9.zip", &zip), ("rac-rs-launcher-windows-x64.exe", b"MZ")], &good);
@@ -379,13 +450,16 @@ mod tests {
             .join(",")
         );
         let list = releases::parse_release_list(&json).unwrap();
-        let v: Vec<String> = installable(&list, false).iter().map(|i| i.version.clone()).collect();
+        let v: Vec<String> = installable_for(true, &list, false).iter().map(|i| i.version.clone()).collect();
         assert_eq!(v, ["0.3.1", "0.3.0", "0.2.2", "0.2.1"]);
-        let t = installable(&list, true);
+        let t = installable_for(true, &list, true);
         assert_eq!(t[0].version, "0.3.2-rc1");
         assert!(t[0].prerelease && t.len() == 5);
         assert_eq!(default_pick(&t).unwrap().version, "0.3.1");
-        assert_eq!(installable(&list, false)[3].date.len(), 10);
+        assert_eq!(installable_for(true, &list, false)[3].date.len(), 10);
+        // Linux: only the releases whose setup.sh speaks the launcher's protocol (review S3); `installable` follows the host
+        assert!(installable_for(false, &list, true).is_empty());
+        assert_eq!(installable(&list, false).len(), if cfg!(windows) { 4 } else { 0 });
         assert_eq!(folder_name("0.2.2", Some("0.3.1")), "Ratchet & Clank 0.2.2");
         assert_eq!(folder_name("0.3.1", Some("0.3.1")), "Ratchet & Clank");
         assert_eq!(default_pick(&[]), None);
@@ -395,17 +469,103 @@ mod tests {
     fn an_older_version_is_installed_by_its_number() {
         let rel = scratch("old");
         let dest = scratch("olddest").join("g");
-        let z = make_zip(&[("rac-rs-0.2.2/VERSION", b"0.2.2\n"), ("rac-rs-0.2.2/setup.ps1", b"#")]);
-        releases::write_test_release(&rel, "v0.2.2", "", &[("rac-rs-0.2.2.zip", &z)], &good);
+        // the oldest version this system installs (Linux: 0.4.1, review S3)
+        let old = min_installable(cfg!(windows));
+        let script = format!("rac-rs-{old}/{}", library::SETUP_SCRIPT);
+        let z = make_zip(&[(format!("rac-rs-{old}/VERSION").as_str(), format!("{old}\n").as_bytes()), (script.as_str(), b"#")]);
+        releases::write_test_release(&rel, &format!("v{old}"), "", &[(format!("rac-rs-{old}.zip").as_str(), &z)], &good);
         let latest = std::fs::read_to_string(rel.join("latest.json")).unwrap();
         std::fs::write(rel.join("releases.json"), format!("[{latest}]")).unwrap();
         let src = ReleaseSource::Folder(rel.clone());
         let (t, st, v) = (Transfer::default(), AtomicU8::new(0), Mutex::new(String::new()));
-        assert_eq!(run(&src, &dest, Some("0.2.2"), &t, &st, &v).unwrap(), "0.2.2");
-        assert_eq!(std::fs::read_to_string(dest.join("VERSION")).unwrap(), "0.2.2\n");
-        assert_eq!(run(&src, &scratch("olddest2"), Some("0.1.0"), &t, &st, &v), Err(ReleaseError::NotFound));
+        assert_eq!(run(&src, &dest, Some(old), &t, &st, &v).unwrap(), old);
+        assert_eq!(std::fs::read_to_string(dest.join("VERSION")).unwrap(), format!("{old}\n"));
+        if cfg!(windows) {
+            assert_eq!(run(&src, &scratch("olddest2"), Some("0.1.0"), &t, &st, &v), Err(ReleaseError::NotFound));
+        } else {
+            // an older release is refused with a message before anything is looked up
+            let e = run(&src, &scratch("olddest2"), Some("0.1.0"), &t, &st, &v);
+            assert!(matches!(e, Err(ReleaseError::Bad(ref m)) if m.contains("0.4.1")), "{e:?}");
+        }
         let _ = std::fs::remove_dir_all(&rel);
         let _ = std::fs::remove_dir_all(dest.parent().unwrap());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn scripts_stay_runnable_after_unpacking() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = scratch("exec");
+        std::fs::create_dir_all(&d).unwrap();
+        let zp = d.join("rel.zip");
+        // setup.sh is stored without any mode; the game exe is stored 0755; a plain file 0644 (0600 would stay 0600).
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            let plain = zip::write::SimpleFileOptions::default();
+            w.start_file("rac-rs-9.9.9/setup.sh", plain).unwrap();
+            w.write_all(b"#!/bin/sh\n").unwrap();
+            w.start_file("rac-rs-9.9.9/VERSION", plain.unix_permissions(0o600)).unwrap();
+            w.write_all(b"9.9.9\n").unwrap();
+            w.start_file("rac-rs-9.9.9/tools/helper", plain.unix_permissions(0o755)).unwrap();
+            w.write_all(b"x").unwrap();
+            w.start_file("rac-rs-9.9.9/tools/other.sh", plain.unix_permissions(0o644)).unwrap();
+            w.write_all(b"x").unwrap();
+            w.finish().unwrap();
+        }
+        std::fs::write(&zp, buf.into_inner()).unwrap();
+        let dest = d.join("out");
+        unpack(&zp, &dest, &Transfer::default()).unwrap();
+        let mode = |p: &str| std::fs::metadata(dest.join(p)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("setup.sh") & 0o755, 0o755, "setup.sh must be runnable");
+        assert_eq!(mode("VERSION"), 0o600);
+        assert_eq!(mode("tools/helper"), 0o755);
+        assert_eq!(mode("tools/other.sh") & 0o755, 0o755);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn linux_refuses_old_game_versions_with_a_clear_message() {
+        assert_eq!(min_installable(true), "0.2.1");
+        assert_eq!(min_installable(false), "0.4.1");
+        assert_eq!(too_old_message(true, "0.2.1"), None);
+        assert_eq!(too_old_message(true, "0.1.0"), None, "Windows keeps its old rules");
+        assert_eq!(too_old_message(false, "0.4.1"), None);
+        assert_eq!(too_old_message(false, "0.5.0"), None);
+        assert_eq!(too_old_message(false, "0.10.0"), None);
+        let m = too_old_message(false, "0.4.0").unwrap();
+        assert!(m.contains("0.4.0") && m.contains("Linux") && m.contains("0.4.1 or newer"), "{m}");
+        assert!(too_old_message(false, "0.3.9").is_some());
+        // a 0.4.1 release and a 0.4.0 release: only the first is offered on Linux, both on Windows
+        let rel = |tag: &str| format!(r#"{{"tag_name":"{tag}","draft":false,"prerelease":false,"published_at":"2026-10-28T10:00:00Z","assets":[{{"name":"rac-rs-{}.zip","size":5,"browser_download_url":"u","digest":"sha256:{}"}}]}}"#, &tag[1..], "ab".repeat(32));
+        let list = releases::parse_release_list(&format!("[{},{}]", rel("v0.4.1"), rel("v0.4.0"))).unwrap();
+        assert_eq!(installable_for(false, &list, false).iter().map(|i| i.version.as_str()).collect::<Vec<_>>(), ["0.4.1"]);
+        assert_eq!(installable_for(true, &list, false).iter().map(|i| i.version.as_str()).collect::<Vec<_>>(), ["0.4.1", "0.4.0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpacked_file_modes_are_cut_to_0755() {
+        // review N1: a zip from Windows tools stores 0666 / 0777
+        assert_eq!(unix_file_mode(Some(0o666), "data/x.bin"), 0o644);
+        assert_eq!(unix_file_mode(Some(0o777), "build/release/rac-rs"), 0o755);
+        assert_eq!(unix_file_mode(Some(0o775), "tools/helper"), 0o755);
+        assert_eq!(unix_file_mode(Some(0o600), "VERSION"), 0o600);
+        assert_eq!(unix_file_mode(None, "README.txt"), 0o644);
+        assert_eq!(unix_file_mode(None, "setup.sh"), 0o755);
+        assert_eq!(unix_file_mode(Some(0o666), "play.sh"), 0o755, "scripts are runnable but never group/world writable");
+        assert_eq!(unix_file_mode(Some(0o664), "tools/x.sh"), 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_system_that_refuses_chmod_is_not_fatal_for_plain_files() {
+        // chmod on a path that vanished fails like a refusing mount: plain file = fine, a .sh that is not runnable = error
+        let d = scratch("nochmod");
+        std::fs::create_dir_all(&d).unwrap();
+        let gone = d.join("nothing_here");
+        assert!(set_exec_bits(&gone, Some(0o644), "data/x.bin").is_ok());
+        assert!(set_exec_bits(&gone, None, "setup.sh").is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

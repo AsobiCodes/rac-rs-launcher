@@ -49,7 +49,7 @@ fn iso() -> Option<PathBuf> {
 fn check_only_through_the_engine() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let (Some(base), Some(iso)) = (flow_base(), iso()) else { return };
-    let opts = EngineOpts { root: base.clone(), iso, update: None, regenerate: false, test_update_base: None, extra: vec!["-CheckOnly".to_string()] };
+    let opts = EngineOpts { root: base.clone(), iso, update: None, regenerate: false, test_update_base: None, system_toolchain: false, extra: vec!["-CheckOnly".to_string()] };
     let mut e = Engine::start(&opts).expect("start setup.ps1");
     let t = Instant::now();
     while e.done.is_none() {

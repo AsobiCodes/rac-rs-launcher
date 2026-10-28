@@ -4,9 +4,10 @@ use crate::cfg::LauncherCfg;
 use crate::discs::{self, DiscCheck, DiscResult};
 use crate::engine::{self, Engine, EngineOpts};
 use crate::games::{self, GameDef, InstallInfo};
-use crate::library::Library;
+use crate::library::{self, Library};
 use crate::profiles::{Profile, Profiles};
 use crate::pcopts::Options;
+use crate::picker::{self, Ask, PickResult};
 use crate::platform;
 use crate::play;
 use crate::selfupdate;
@@ -21,7 +22,7 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const LAUNCHER_EXE: &str = "RAC-RS Launcher.exe";
+pub const LAUNCHER_EXE: &str = if cfg!(windows) { "RAC-RS Launcher.exe" } else { "rac-rs-launcher" };
 pub const SHORTCUT_NAME: &str = "Ratchet & Clank (rac-rs)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +136,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
             // the two release sources for tests (folders with latest.json); the environment is inherited by a restarted launcher
             "--launcher-releases" => set_env_arg("RAC_LAUNCHER_RELEASES", it.next()),
             "--game-releases" => set_env_arg("RAC_GAME_RELEASES", it.next()),
+            // folder with one `<owner>/<repo>/latest.json` per mod repo, instead of GitHub (mod updates)
+            "--mod-releases" => set_env_arg("RAC_MOD_RELEASES", it.next()),
             _ => {}
         }
     }
@@ -169,7 +172,7 @@ pub struct App {
     pub disc_path: Option<PathBuf>,
     pub disc_edit_at: Option<Instant>,
     pub shortcut_wanted: bool,
-    pub picker: Option<(Purpose, Receiver<Option<PathBuf>>)>,
+    pub picker: Option<(Purpose, Receiver<PickResult>)>,
     // the worker
     pub engine: Option<Engine>,
     pub run_kind: RunKind,
@@ -193,12 +196,16 @@ pub struct App {
     /// The graphics preset the player clicked last (shown while the options still match it; see `presets`).
     pub preset_picked: Option<crate::ui::presets::Preset>,
     pub mods_ui: ModsUi,
+    /// Update checks and the running update job of the script mods (see `page_mods_update`).
+    pub mod_updates: crate::ui::page_mods_update::ModUpdates,
     // shell
     pub covers: Covers,
     pub toast: Option<Toast>,
     pub confirm_quit: bool,
     pub quit_now: bool,
     pub shortcut_dir: Option<PathBuf>,
+    /// Settings > Advanced shows the "Use my system's Rust and Python" tick (Linux only; tests can set it).
+    pub show_toolchain_option: bool,
     pub restart_exe: Option<PathBuf>,
     pub restarted: bool,
     /// Downloads and the launcher's own update (see state_net.rs).
@@ -255,11 +262,13 @@ impl App {
             confirm_reset: false,
             preset_picked: None,
             mods_ui: ModsUi::default(),
+            mod_updates: crate::ui::page_mods_update::ModUpdates::from_env(),
             covers: Covers::default(),
             toast: None,
             confirm_quit: false,
             quit_now: false,
             shortcut_dir: std::env::var_os("RAC_LAUNCHER_SHORTCUT_DIR").map(PathBuf::from),
+            show_toolchain_option: !cfg!(windows),
             restart_exe: None,
             restarted: false,
             net: crate::ui::state_net::Net::from_env(),
@@ -278,6 +287,12 @@ impl App {
             library,
             cfg,
         };
+        // a test update base that is a folder also serves the first install (VERSION + v<ver>.zip), unless RAC_GAME_RELEASES says otherwise
+        if let Some(dir) = app.update_base.as_deref().and_then(update::local_base) {
+            if std::env::var("RAC_GAME_RELEASES").map(|s| s.trim().is_empty()).unwrap_or(true) {
+                app.net.game_src = crate::releases::ReleaseSource::Folder(dir);
+            }
+        }
         app.cleanup_old_exe();
         if let Some(id) = want {
             app.enter_install(&id);
@@ -429,20 +444,16 @@ impl App {
             Purpose::Iso => Some(PathBuf::from(&self.cfg.last_iso_dir)).filter(|p| !self.cfg.last_iso_dir.is_empty() && p.is_dir()),
             _ => platform::known_folder(platform::Known::Documents),
         };
+        let ask = match purpose {
+            Purpose::Iso => Ask::file("Pick your Ratchet & Clank (Europe or USA, v1.00) disc image", &[("Disc image (*.iso)", &["iso"]), ("All files", &["*"])], start_dir),
+            Purpose::ModZip => Ask::file("Pick a mod or texture pack (.zip)", &[("Zip file (*.zip)", &["zip"])], start_dir),
+            Purpose::ModFolder => Ask::folder("Pick the folder of a mod or texture pack", start_dir),
+            Purpose::AddInstall => Ask::folder(&format!("Pick the folder of your RAC-RS game (it holds VERSION and {})", library::SETUP_SCRIPT), start_dir),
+            Purpose::NewInstall => Ask::folder("Pick the folder for the game", start_dir),
+        };
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let mut d = rfd::FileDialog::new();
-            if let Some(s) = start_dir {
-                d = d.set_directory(s);
-            }
-            let r = match purpose {
-                Purpose::Iso => d.set_title("Pick your Ratchet & Clank (Europe or USA, v1.00) disc image").add_filter("Disc image (*.iso)", &["iso"]).add_filter("All files", &["*"]).pick_file(),
-                Purpose::ModZip => d.set_title("Pick a mod or texture pack (.zip)").add_filter("Zip file (*.zip)", &["zip"]).pick_file(),
-                Purpose::ModFolder => d.set_title("Pick the folder of a mod or texture pack").pick_folder(),
-                Purpose::AddInstall => d.set_title("Pick the folder of your RAC-RS game (it holds VERSION and setup.ps1)").pick_folder(),
-                Purpose::NewInstall => d.set_title("Pick the folder for the game").pick_folder(),
-            };
-            let _ = tx.send(r);
+            let _ = tx.send(picker::pick(&ask));
         });
         self.picker = Some((purpose, rx));
     }
@@ -452,7 +463,16 @@ impl App {
         let purpose = *purpose;
         let Ok(res) = rx.try_recv() else { return };
         self.picker = None;
-        let Some(p) = res else { return };
+        let p = match res {
+            PickResult::Picked(p) => p,
+            PickResult::Cancelled => return,
+            PickResult::Unavailable(m) => {
+                // no dialog program: say so, and name the way around it (the disc and folder pages have a box to type in)
+                let way = if matches!(purpose, Purpose::ModZip | Purpose::ModFolder) { " For a mod you can also put its folder into the game's mods folder." } else { "" };
+                self.toast(format!("{m}{way}"), true);
+                return;
+            }
+        };
         match purpose {
             Purpose::Iso => {
                 if let Some(d) = p.parent() {
@@ -481,7 +501,11 @@ impl App {
         let Some(iso) = self.disc_path.clone() else { return };
         let repair = self.view == View::Repair;
         self.run_kind = if repair { RunKind::Repair } else { RunKind::Install };
-        let opts = EngineOpts { root: self.root.clone(), iso, update: None, regenerate: repair, test_update_base: None, extra: engine::env_extra_args() };
+        if let Some(m) = crate::games::contract_problem(cfg!(windows), &self.root) {
+            self.fail_before_start(m, false);
+            return;
+        }
+        let opts = EngineOpts { root: self.root.clone(), iso, update: None, regenerate: repair, test_update_base: None, system_toolchain: self.cfg.use_system_toolchain, extra: engine::env_extra_args() };
         self.start_engine(opts);
     }
 
@@ -504,11 +528,14 @@ impl App {
         self.last_update = Some((to.to_string(), finish));
         self.run_kind = RunKind::Update { to: to.to_string(), finish };
         // a backup is a finished copy of an old version: nothing ever updates it
-        let msg = if self.is_backup() { Some("A backup is never updated. Open your main install to update.".to_string()) } else { self.update_blocker() };
+        let msg = if self.is_backup() {
+            Some("A backup is never updated. Open your main install to update.".to_string())
+        } else {
+            // Linux: a version from before the Linux setup, or an install whose setup.sh predates the launcher's protocol, cannot be updated
+            crate::game_dl::too_old_message(cfg!(windows), to).or_else(|| crate::games::contract_problem(cfg!(windows), &self.root)).or_else(|| self.update_blocker())
+        };
         if let Some(m) = msg {
-            self.failure = Some(Failure { message: m, details: String::new(), log: String::new(), update: true });
-            self.engine = None;
-            self.view = View::Failed;
+            self.fail_before_start(m, true);
             return;
         }
         let iso = self.info.iso.clone().unwrap_or_default();
@@ -518,9 +545,17 @@ impl App {
             update: Some((to.to_string(), finish)),
             regenerate: false,
             test_update_base: self.update_base.clone(),
+            system_toolchain: self.cfg.use_system_toolchain,
             extra: engine::env_extra_args(),
         };
         self.start_engine(opts);
+    }
+
+    /// The run does not start: the Failed page with `message` (nothing was changed).
+    fn fail_before_start(&mut self, message: String, update: bool) {
+        self.failure = Some(Failure { message, details: String::new(), log: String::new(), update });
+        self.engine = None;
+        self.view = View::Failed;
     }
 
     fn start_engine(&mut self, opts: EngineOpts) {
@@ -593,9 +628,13 @@ impl App {
     fn make_shortcut_note(&mut self) -> String {
         match self.create_shortcut() {
             Ok(p) => {
-                let desk = platform::known_folder(platform::Known::Desktop);
-                if self.shortcut_dir.is_none() && p.parent().map(|d| Some(d.to_path_buf()) == desk).unwrap_or(false) {
-                    format!("The shortcut \"{SHORTCUT_NAME}\" is on your desktop. It opens this launcher.")
+                let usual = platform::shortcut_dir();
+                if self.shortcut_dir.is_none() && p.parent().map(|d| Some(d.to_path_buf()) == usual).unwrap_or(false) {
+                    if cfg!(windows) {
+                        format!("The shortcut \"{SHORTCUT_NAME}\" is on your desktop. It opens this launcher.")
+                    } else {
+                        format!("The launcher is in your applications menu as \"{SHORTCUT_NAME}\".")
+                    }
                 } else {
                     format!("A shortcut was created here: {}", p.display())
                 }
@@ -614,7 +653,7 @@ impl App {
                 std::env::current_exe().map_err(|e| e.to_string())?
             }
         };
-        let dir = self.shortcut_dir.clone().or_else(|| platform::known_folder(platform::Known::Desktop)).ok_or("The desktop folder was not found.")?;
+        let dir = self.shortcut_dir.clone().or_else(platform::shortcut_dir).ok_or(if cfg!(windows) { "The desktop folder was not found." } else { "The applications folder was not found." })?;
         let ico = self.root.join("rac-rs.ico");
         let icon = ico.is_file().then_some(ico);
         platform::create_shortcut(&dir, SHORTCUT_NAME, &target, &self.root, icon.as_deref())
@@ -629,6 +668,10 @@ impl App {
     /// Play: the selected profile's settings and mods list are written for the game, then the game starts.
     pub fn play(&mut self, ctx: &egui::Context) {
         self.play_error = None;
+        if self.mod_updates.job.is_some() {
+            self.play_error = Some("A mod update is still being installed. Wait a moment, then press Play again.".to_string());
+            return;
+        }
         let g = self.rac1();
         if let Err(m) = play::check_ready(&self.root, g) {
             self.play_error = Some(m);
@@ -709,6 +752,7 @@ impl App {
             || self.game_child.is_some()
             || self.toast.is_some()
             || self.mods_ui.busy()
+            || self.mod_updates.busy()
             || net_busy
             || matches!(self.update_state(), UpdateState::Checking)
             || self.info.installed;
@@ -748,6 +792,17 @@ mod tests {
         assert_eq!(a.root.as_deref(), Some(Path::new("D:\\x")));
         assert!(a.restarted);
         assert_eq!(a.update_base.as_deref(), Some("E:\\b"));
+    }
+
+    #[test]
+    fn the_mod_releases_flag_sets_the_folder_the_mod_update_checks_read() {
+        // the only test that touches this variable (it is process-wide)
+        std::env::remove_var("RAC_MOD_RELEASES");
+        assert!(crate::ui::page_mods_update::ModUpdates::from_env().releases_dir.is_none());
+        parse_args(["--mod-releases".to_string(), "E:/fake/mod_releases".to_string()]);
+        let got = crate::ui::page_mods_update::ModUpdates::from_env().releases_dir;
+        std::env::remove_var("RAC_MOD_RELEASES");
+        assert_eq!(got.as_deref(), Some(Path::new("E:/fake/mod_releases")));
     }
 
     #[test]

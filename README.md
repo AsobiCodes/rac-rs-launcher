@@ -7,7 +7,8 @@ The game itself (download, changelog, bug reports): https://github.com/AsobiCode
 Project site: https://asobicodes.dev
 
 ## Download
-Get `rac-rs-launcher-windows-x64.exe` from the [Releases](../../releases) page (the release shows its SHA-256) and double-click it.
+Windows: get `rac-rs-launcher-windows-x64.exe` from the [Releases](../../releases) page (the release shows its SHA-256) and double-click it.
+Linux (x86-64): get `rac-rs-launcher-linux-x64` from the same [Releases](../../releases) page, make it runnable (`chmod +x rac-rs-launcher-linux-x64`, or tick "Allow executing as program" in the file's properties) and start it (`./rac-rs-launcher-linux-x64`). The install page asks for your disc image and builds the game with the game's own `setup.sh`; no programming tools and no sudo are needed. Needs game version 0.4.1 or newer. Steam Deck: switch to Desktop Mode, download the file there and start it as above (not yet tried on a real Deck, please report what you find).
 The launcher checks for a new launcher and a new game version and asks before it installs either. It updates itself only from this repo.
 
 ## Install a game
@@ -27,7 +28,7 @@ Saves: "Open saves folder" opens the install's saves folder (copy `card.bin` bet
 "Open log folder" (Game page, sidebar, or Settings > Advanced) opens the folder with `log.txt` selected: attach it to an issue on [AsobiCodes/rac-rs](https://github.com/AsobiCodes/rac-rs/issues). If you already restarted the game, attach `log.prev.txt` too.
 
 ## Build from source
-`cd launcher; cargo build --release` (Rust stable). `build_release.ps1` makes `dist\rac-rs-launcher-windows-x64.exe` and its SHA-256. `check_linux.ps1` checks the Linux build.
+`cd launcher; cargo build --release` (Rust stable). `build_release.ps1` makes `dist\rac-rs-launcher-windows-x64.exe` and its SHA-256. `check_linux.ps1` checks the Linux build and `build_linux.ps1` makes the Linux binary from Windows (on Linux itself `cargo build --release` is enough).
 
 ## License
 GPL-3.0-or-later, see LICENSE. The libraries built into the exe and their licences are listed in THIRD_PARTY.md.

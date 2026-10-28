@@ -130,13 +130,12 @@ impl ReleaseSource {
 
     pub fn latest(&self) -> Result<Release, ReleaseError> {
         let text = match self {
-            ReleaseSource::Folder(dir) => std::fs::read_to_string(dir.join("latest.json")).map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ReleaseError::NotFound
-                } else {
-                    ReleaseError::Io(e.to_string())
-                }
-            })?,
+            ReleaseSource::Folder(dir) => match std::fs::read_to_string(dir.join("latest.json")) {
+                Ok(t) => t,
+                // a folder in the layout of the update server (VERSION, CHANGELOG.md, v<ver>.zip) is a release too
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return folder_release(dir).ok_or(ReleaseError::NotFound),
+                Err(e) => return Err(ReleaseError::Io(e.to_string())),
+            },
             ReleaseSource::GitHub { owner, repo } => {
                 let url = format!("{API_BASE}/{owner}/{repo}/releases/latest");
                 let mut resp = http_get(&url, Some("application/vnd.github+json"))?;
@@ -188,6 +187,27 @@ impl ReleaseSource {
             }
         }
     }
+}
+
+/// A folder with `VERSION`, `CHANGELOG.md` (optional) and `v<ver>.zip` but no `latest.json` (what `RAC_LAUNCHER_UPDATE_BASE` points at for a
+/// test update server): the zip becomes the asset `rac-rs-<ver>.zip` of a release `v<ver>`, with its sha256 as digest and the head of the changelog as notes.
+pub fn folder_release(dir: &Path) -> Option<Release> {
+    let ver = std::fs::read_to_string(dir.join("VERSION")).ok()?.trim_start_matches('\u{feff}').trim().to_string();
+    if ver.is_empty() || ver.contains(['/', '\\']) {
+        return None;
+    }
+    let zip = dir.join(format!("v{ver}.zip"));
+    let size = std::fs::metadata(&zip).ok().filter(|m| m.is_file())?.len();
+    let hex = sha256_file(&zip).ok()?;
+    let notes = std::fs::read_to_string(dir.join("CHANGELOG.md")).map(|t| t.lines().take(40).collect::<Vec<_>>().join("\n")).ok();
+    Some(Release {
+        tag_name: format!("v{ver}"),
+        body: notes,
+        assets: vec![Asset { name: format!("rac-rs-{ver}.zip"), size, browser_download_url: format!("v{ver}.zip"), digest: Some(format!("sha256:{hex}")) }],
+        draft: false,
+        prerelease: false,
+        published_at: None,
+    })
 }
 
 pub fn parse_release(text: &str) -> Result<Release, ReleaseError> {
@@ -442,6 +462,34 @@ mod tests {
         let dest = d.join("o").join("a.bin");
         assert_eq!(download(&src, &rel.assets[0], &dest, &t), Err(ReleaseError::Cancelled));
         assert!(!dest.exists() && !d.join("o").join("a.bin.part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_update_server_folder_is_a_release() {
+        let d = scratch("srv");
+        std::fs::create_dir_all(&d).unwrap();
+        // no VERSION / no zip: still not found
+        assert_eq!(ReleaseSource::Folder(d.clone()).latest(), Err(ReleaseError::NotFound));
+        std::fs::write(d.join("VERSION"), "\u{feff}9.8.7\r\n").unwrap();
+        assert_eq!(ReleaseSource::Folder(d.clone()).latest(), Err(ReleaseError::NotFound));
+        std::fs::write(d.join("v9.8.7.zip"), b"zipbytes").unwrap();
+        std::fs::write(d.join("CHANGELOG.md"), "## 9.8.7\n- new thing\n").unwrap();
+        let src = ReleaseSource::Folder(d.clone());
+        let rel = src.latest().unwrap();
+        assert_eq!(rel.version(), "9.8.7");
+        assert!(rel.notes().contains("new thing"));
+        let a = rel.asset("rac-rs-9.8.7.zip").unwrap();
+        assert_eq!((a.size, a.browser_download_url.as_str()), (8, "v9.8.7.zip"));
+        assert_eq!(digest_hex(a), Some(sha256_file(&d.join("v9.8.7.zip")).unwrap()));
+        assert_eq!(src.list().unwrap().len(), 1, "list falls back to latest");
+        // the download goes through the normal checked path
+        let dest = d.join("out").join("rac-rs-9.8.7.zip");
+        download(&src, a, &dest, &Transfer::default()).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"zipbytes");
+        // a latest.json still wins
+        write_test_release(&d, "v1.0.0", "", &[("x.bin", b"x")], &good);
+        assert_eq!(src.latest().unwrap().version(), "1.0.0");
         let _ = std::fs::remove_dir_all(&d);
     }
 

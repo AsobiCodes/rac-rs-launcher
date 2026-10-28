@@ -99,7 +99,8 @@ impl Progress {
             self.tools_sub = 0.15;
         } else if line.contains("downloading Python") {
             self.tools_sub = 0.6;
-        } else if line.contains("downloading the GNU assembler") {
+        } else if line.contains("downloading the GNU assembler") || line.contains("downloading the C linker") {
+            // Windows: the GNU assembler; Linux: the C linker (zig)
             self.tools_sub = 0.8;
         } else if let Some(p) = line.split("desktop shortcut created: ").nth(1) {
             self.shortcut = Some(p.trim().to_string());
@@ -154,26 +155,47 @@ impl Progress {
 
     /// Get-ErrorText: what the player reads when the worker failed.
     pub fn error_text(&self) -> String {
+        self.error_text_for(!cfg!(windows))
+    }
+
+    /// `error_text` for either system (tests check both on any host). `linux` = false keeps the exact Windows texts: the Linux
+    /// fix hints and the extra network patterns are not used there.
+    pub fn error_text_for(&self, linux: bool) -> String {
         if self.update && self.exit_code == Some(3) {
             return "The update could not be downloaded.\n\nPlease check your internet connection and click Try again. Nothing on your PC was changed.".to_string();
         }
         let all = self.log.join("\n");
         let no_compile: String = self.log.iter().filter(|l| !l.trim_start().starts_with("Compiling ")).cloned().collect::<Vec<_>>().join("\n").to_lowercase();
-        let net = self.step == 0
-            || [
-                "could not download", "failed to download", "couldn't resolve", "could not resolve", "resolve host", "timed out", "unable to connect",
-                "spurious network", "network failure", "failed to get ",
-            ]
-            .iter()
-            .any(|p| no_compile.contains(p))
-            || (no_compile.contains("download of ") && no_compile.contains(" failed"));
+        let net_text = [
+            "could not download", "failed to download", "couldn't resolve", "could not resolve", "resolve host", "timed out", "unable to connect",
+            "spurious network", "network failure", "failed to get ",
+        ]
+        .iter()
+        .any(|p| no_compile.contains(p))
+            || (no_compile.contains("download of ") && no_compile.contains(" failed"))
+            // curl / the system resolver, as seen on Linux only (Windows keeps its old list)
+            || (linux
+                && ["failed to connect", "connection refused", "connection reset", "name or service not known", "temporary failure in name resolution", "network is unreachable"]
+                    .iter()
+                    .any(|p| no_compile.contains(p)));
+        // Windows: step 0 is only downloads, so any failure there is a network one. Linux: setup.sh's step (a) also runs the pre-checks
+        // (folder cannot run programs, missing libasound/libudev, no cargo/python3/cc, Rust too old), so there an ERROR line that
+        // is not a network text is shown as it is; "check your internet connection" stays for network texts and for a bare step-0 stop.
+        let net = if linux { net_text || (self.step == 0 && self.last_error.is_empty()) } else { self.step == 0 || net_text };
         let lall = all.to_lowercase();
         let disk = ["no space left", "not enough space", "os error 112", "there is not enough space"].iter().any(|p| lall.contains(p));
         let mut m = format!("The step '{}' did not finish.", self.step_name());
         if self.step == 1 {
             m = "The disc image was not accepted.\n\nIt must be Ratchet & Clank PAL / Europe v1.00 or USA v1.00 as one .iso file. Click Try again and pick the right file.".to_string();
         } else if disk {
-            m += "\n\nThere may not be enough free disk space (about 5 GB are needed). Free some space and click Try again.";
+            m += &format!("\n\nThere may not be enough free disk space (about {} GB are needed). Free some space and click Try again.", crate::library::NEEDED_GB);
+        } else if let Some(h) = system_hint(&self.log, linux, net_text) {
+            m += &format!("\n\n{h}");
+            // the hint never hides what the setup really said
+            if !self.last_error.is_empty() {
+                m += &format!("\n\nThe last error line was: {}", self.last_error);
+            }
+            m += "\n\nThen click Try again. If it keeps failing, click Copy details and share them when you ask for help.";
         } else if net {
             m += "\n\nPlease check your internet connection, then click Try again. Setup continues where it stopped.";
         } else {
@@ -188,11 +210,12 @@ impl Progress {
         m
     }
 
-    /// Get-DetailsText: for "Copy details".
-    pub fn details_text(&self, windows: &str) -> String {
+    /// Get-DetailsText: for "Copy details". `system` is the operating system text (`platform::os_text`).
+    pub fn details_text(&self, system: &str) -> String {
         let tail: Vec<&String> = self.log.iter().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect();
         let log = tail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-        format!("Ratchet & Clank (rac-rs) setup - problem report\nStep: {}\nError: {}\nWindows: {}\n\nLog (last 200 lines):\n{}", self.step_name(), self.last_error, windows, log)
+        let label = if cfg!(windows) { "Windows" } else { "System" };
+        format!("Ratchet & Clank (rac-rs) setup - problem report\nStep: {}\nError: {}\n{}: {}\n\nLog (last 200 lines):\n{}", self.step_name(), self.last_error, label, system, log)
     }
 
     pub fn elapsed_text(since: Instant, now: Instant) -> String {
@@ -203,6 +226,54 @@ impl Progress {
 pub fn format_elapsed(d: Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}", s / 60, s % 60)
+}
+
+/// Lines cargo (and setup.sh's own progress lines) print about work that went well: they name crates (`Downloaded alsa-sys`) and must never
+/// count as evidence for a problem.
+fn is_status_line(l: &str) -> bool {
+    let t = l.trim_start().to_lowercase();
+    ["compiling ", "downloaded ", "downloading ", "fresh ", "checking ", "locking ", "adding ", "updating ", "compiled ", "building ", "finished "].iter().any(|p| t.starts_with(p))
+}
+
+/// `zig` as a word of its own (`zig:`, `zig cc`, `zig-linux-...`), not inside `ziglang` or `zigzag`.
+fn mentions_zig(l: &str) -> bool {
+    l.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "zig")
+}
+
+/// Linux problems that have a known fix a player can do. `linux` = false gives no hint at all (the Windows failure texts stay as they were).
+/// `net` = the log looks like a network failure: that text wins over the zig hint (a DNS error names `ziglang.org`).
+/// Only lines that are not cargo status lines count, and a library is blamed only when ONE line says it is missing (a pkg-config failure,
+/// `cannot find -lasound`, `libasound.so: cannot open shared object file`), so an unrelated error after the crate downloads shows its own text.
+fn system_hint(log: &[String], linux: bool, net: bool) -> Option<String> {
+    if !linux {
+        return None;
+    }
+    let lines: Vec<String> = log.iter().filter(|l| !is_status_line(l)).map(|l| l.to_lowercase()).collect();
+    let any = |f: &dyn Fn(&str) -> bool| lines.iter().any(|l| f(l));
+    // setup.sh's own `ERROR: ...` lines already name what is wrong (and the install command for this distribution), and some of them
+    // list package names in passing (`no C compiler found (cc/gcc): install gcc, pkg-config and the libasound2-dev ...`): they never blame a library
+    let libs: Vec<String> = log.iter().filter(|l| !is_status_line(l) && !l.starts_with("ERROR: ")).map(|l| l.to_lowercase()).collect();
+    let any_lib = |f: &dyn Fn(&str) -> bool| libs.iter().any(|l| f(l));
+    let miss = |l: &str| ["was not found", "pkg-config", "cannot find", "no such file", "cannot open shared object"].iter().any(|p| l.contains(p));
+    let pkgconfig = |l: &str| l.contains("pkg-config") || l.contains("was not found") || l.contains(".pc");
+    if any_lib(&|l| l.contains("-lasound") || l.contains("alsa.pc") || l.contains("asoundlib.h") || ((l.contains("alsa") || l.contains("libasound")) && miss(l))) {
+        let dev = if any_lib(&|l| (l.contains("alsa") || l.contains("libasound")) && pkgconfig(l)) { " (the development package: libasound2-dev, alsa-lib-devel or alsa-lib)" } else { "" };
+        return Some(format!("The sound library ALSA is missing{dev}. Install it with your package manager (Debian/Ubuntu: libasound2, Fedora: alsa-lib, Arch: alsa-lib)."));
+    }
+    if any_lib(&|l| l.contains("-ludev") || l.contains("libudev.pc") || ((l.contains("udev")) && miss(l))) {
+        let dev = if any_lib(&|l| l.contains("udev") && pkgconfig(l)) { " (the development package: libudev-dev, systemd-devel or systemd-libs)" } else { "" };
+        return Some(format!("The device library libudev is missing{dev}. Install it with your package manager (Debian/Ubuntu: libudev1, Fedora: systemd-libs, Arch: systemd-libs)."));
+    }
+    if any(&|l| l.contains("linker `cc` not found") || l.contains("linker 'cc' not found") || l.contains("linker cc not found")) {
+        return Some("No C compiler (gcc) was found. Switch off \"Use my system's Rust and Python\" in Settings > Advanced so the launcher uses its own tools, or install gcc (Debian/Ubuntu: build-essential, Fedora: gcc, Arch: base-devel).".to_string());
+    }
+    if any(&|l| l.contains("python3: not found") || l.contains("python3: command not found") || l.contains("python3 was not found")) {
+        return Some("Python 3 was not found. Switch off \"Use my system's Rust and Python\" in Settings > Advanced so the launcher uses its own, or install python3 with your package manager.".to_string());
+    }
+    if !net && any(&|l| !l.contains("download") && mentions_zig(l) && (l.contains("error") || l.contains("failed") || l.contains("could not"))) {
+        return Some("The C linker the launcher downloads (zig) did not work on this system. Switch on \"Use my system's Rust and Python\" in Settings > Advanced and make sure gcc is installed (Debian/Ubuntu: build-essential), or check that your download is not blocked.".to_string());
+    }
+    None
 }
 
 fn leading_number(s: &str) -> Option<u32> {
@@ -342,7 +413,255 @@ mod tests {
         p.feed_line("ERROR: weird");
         let t = p.error_text();
         assert!(t.contains("weird") && t.contains("Play old version"), "{t}");
-        assert!(p.details_text("Windows 11").contains("Step: Build game"));
+        let d = p.details_text("Windows 11");
+        assert!(d.contains("Step: Build game") && d.contains(&format!("{}: Windows 11", if cfg!(windows) { "Windows" } else { "System" })), "{d}");
+        let mut p = Progress::new(false);
+        p.feed_line("== (c) code");
+        p.feed_line("OSError: [Errno 28] No space left on device");
+        assert!(p.error_text().contains(&format!("about {} GB", crate::library::NEEDED_GB)));
+    }
+
+    /// The console output a setup.sh run prints (shape of CONTRACT section 2): tools incl. the C linker, disc, code, build, finish.
+    const LINUX_LOG: &str = "== (a) tools\n  downloading Rust 1.99.0 ...\n  downloading Python 3.12 ...\n  downloading the C linker (zig 0.14.1) ...\n\
+== (b) disc image\n  disc ok: PAL\n== (c) generating game code\n  level 1 done\n  level 2 done\n== (c2) VU\nexpect-compiles: 3\n== (d) building the game\n   Compiling a v1\n   Compiling b v1\n   Compiling c v1\n\
+== (e) play.cfg\n  desktop shortcut created: /home/p/.local/share/applications/rac-rs-launcher.desktop\n== done\n";
+
+    #[test]
+    fn a_linux_setup_log_drives_the_bar() {
+        let mut p = Progress::new(false);
+        let mut steps = vec![];
+        let mut bar = vec![];
+        for l in LINUX_LOG.lines() {
+            p.feed_line(l);
+            if steps.last() != Some(&p.step) {
+                steps.push(p.step);
+            }
+            bar.push(p.update_progress(Instant::now()));
+            if l.contains("downloading the C linker") {
+                assert_eq!(p.tools_sub, 0.8, "the C linker line moves the tools part");
+                assert_eq!(bar.last(), Some(&6), "1 + 7 * 0.8 = 6.6");
+            }
+        }
+        assert_eq!(steps, vec![0, 1, 2, 3, 4]);
+        assert!(p.finished && p.levels == 2 && p.compiled == 3 && p.expect == 3);
+        assert_eq!(*bar.last().unwrap(), 100);
+        assert!(bar.windows(2).all(|w| w[0] <= w[1]), "the bar never goes back: {bar:?}");
+        assert_eq!(p.shortcut.as_deref(), Some("/home/p/.local/share/applications/rac-rs-launcher.desktop"));
+        // a real setup.sh log, when the path is given
+        if let Some(path) = std::env::var_os("RAC_TEST_SETUP_LOG_LINUX") {
+            if let Ok(bytes) = std::fs::read(path) {
+                let mut r = Progress::new(false);
+                for l in String::from_utf8_lossy(&bytes).lines() {
+                    r.feed_line(l);
+                }
+                assert!(r.finished && r.update_progress(Instant::now()) == 100);
+            }
+        }
+    }
+
+    #[test]
+    fn linux_failures_get_a_fix_to_do() {
+        let mk = |step_line: &str, lines: &[&str]| {
+            let mut p = Progress::new(false);
+            p.feed_line(step_line);
+            for l in lines {
+                p.feed_line(l);
+            }
+            p.error_text_for(true)
+        };
+        let t = mk("== (d) building", &["   Compiling alsa-sys v0.3.1", "error: failed to run custom build command for `alsa-sys v0.3.1`", "  The system library `alsa` required by crate `alsa-sys` was not found.", "  Could not run `pkg-config --libs alsa`"]);
+        assert!(t.contains("ALSA") && t.contains("libasound2-dev") && t.contains("Try again"), "{t}");
+        // the hint still shows the real last error line
+        assert!(t.contains("The last error line was: failed to run custom build command"), "{t}");
+        let t = mk("== (d) building", &["error: linking with `cc` failed", "  = note: /usr/bin/ld: cannot find -ludev: No such file or directory"]);
+        assert!(t.contains("libudev") && !t.contains("internet"), "{t}");
+        let t = mk("== (d) building", &["error: linker `cc` not found", "  = note: No such file or directory (os error 2)"]);
+        assert!(t.contains("Settings > Advanced") && t.contains("gcc"), "{t}");
+        let t = mk("== (c) code", &["setup.sh: line 40: python3: not found"]);
+        assert!(t.contains("Python 3") && t.contains("Settings > Advanced"), "{t}");
+        let t = mk("== (a) tools", &["  downloading the C linker (zig 0.14.1) ...", "zig: error: unable to find library", "ERROR: zig cc did not work"]);
+        assert!(t.contains("zig") && t.contains("Use my system"), "{t}");
+        // a plain network problem in the same step still says internet, also when zig is being downloaded
+        let t = mk("== (a) tools", &["  downloading the C linker (zig 0.14.1) ...", "ERROR: could not download zig-linux-x86_64-0.14.1.tar.xz"]);
+        assert!(t.contains("internet connection"), "{t}");
+        // crate names alone (Compiling lines) never trigger a hint
+        let t = mk("== (d) building", &["   Compiling alsa-sys v0.3.1", "   Compiling libudev-sys v0.1.4", "ERROR: weird"]);
+        assert!(!t.contains("ALSA") && !t.contains("libudev") && t.contains("weird"), "{t}");
+    }
+
+    /// The real shape of a Linux setup.sh log: cargo prints `Downloaded <crate>` lines for alsa-sys, libudev-sys and pkg-config on EVERY
+    /// build (review B1), so a failure that has nothing to do with them must show its own error, not the ALSA hint.
+    const DOWNLOADED: [&str; 7] = [
+        "== (d) building the game",
+        "  Downloaded libudev-sys v0.1.4",
+        "  Downloaded pkg-config v0.3.31",
+        "  Downloaded alsa-sys v0.3.1",
+        "  Downloaded alsa v0.9.1",
+        "   Compiling alsa-sys v0.3.1",
+        "   Compiling rac-rs v0.4.1",
+    ];
+
+    fn mk_linux(extra: &[&str]) -> String {
+        let mut p = Progress::new(false);
+        for l in DOWNLOADED.iter().chain(extra.iter()) {
+            p.feed_line(l);
+        }
+        p.error_text_for(true)
+    }
+
+    #[test]
+    fn downloaded_crates_never_cause_a_library_hint() {
+        let t = mk_linux(&["ERROR: cargo build failed (rustc was killed, out of memory)"]);
+        assert!(!t.contains("ALSA") && !t.contains("libudev") && !t.contains("Settings > Advanced"), "{t}");
+        assert!(t.contains("cargo build failed (rustc was killed, out of memory)"), "the real error text stays: {t}");
+        // a Downloaded line next to a real linker error: still the plain text of that error
+        let t = mk_linux(&["error: linking with `cc` failed: exit status: 1"]);
+        assert!(!t.contains("ALSA") && t.contains("linking with `cc` failed"), "{t}");
+        // the real missing-library failure after the same prefix still gets its hint
+        let t = mk_linux(&["error: failed to run custom build command for `alsa-sys v0.3.1`", "  The system library `alsa` required by crate `alsa-sys` was not found."]);
+        assert!(t.contains("ALSA") && t.contains("libasound2-dev") && t.contains("failed to run custom build command"), "{t}");
+        let t = mk_linux(&["  = note: /usr/bin/ld: cannot find -ludev: No such file or directory"]);
+        assert!(t.contains("libudev") && !t.contains("ALSA"), "{t}");
+    }
+
+    #[test]
+    fn network_failures_beat_the_zig_hint() {
+        let mk = |lines: &[&str]| {
+            let mut p = Progress::new(false);
+            p.feed_line("== (a) tools");
+            for l in lines {
+                p.feed_line(l);
+            }
+            p.error_text_for(true)
+        };
+        for l in [
+            "curl: (6) Could not resolve host: ziglang.org",
+            "curl: (7) Failed to connect to ziglang.org port 443 after 3 ms: Connection refused",
+            "ERROR: could not download zig-linux-x86_64-0.14.1.tar.xz",
+            "wget: unable to resolve host address 'ziglang.org'",
+            "curl: (28) Connection timed out after 30001 milliseconds",
+            "ziglang.org: Temporary failure in name resolution",
+        ] {
+            let t = mk(&["  downloading the C linker (zig 0.14.1) ...", l]);
+            assert!(t.contains("internet connection") && !t.contains("Use my system"), "{l}: {t}");
+        }
+        // a real zig failure (no network words) still gets the zig hint; `ziglang` / `zigzag` alone do not
+        let t = mk(&["zig: error: unable to find library"]);
+        assert!(t.contains("Use my system"), "{t}");
+        let mut p = Progress::new(false);
+        p.feed_line("== (d) building");
+        p.feed_line("error: could not compile `zigzag` (lib) due to 1 previous error");
+        let t = p.error_text_for(true);
+        assert!(!t.contains("Use my system") && t.contains("zigzag"), "{t}");
+    }
+
+    #[test]
+    fn windows_failure_texts_get_no_linux_hint() {
+        // the same logs that give a hint on Linux give the plain old texts on Windows (review S5)
+        for lines in [
+            vec!["error: failed to run custom build command for `alsa-sys v0.3.1`", "  The system library `alsa` required by crate `alsa-sys` was not found.", "  Could not run `pkg-config --libs alsa`"],
+            vec!["error: linker `cc` not found"],
+            vec!["zig: error: unable to find library"],
+        ] {
+            let mut p = Progress::new(false);
+            p.feed_line("== (d) building");
+            for l in &lines {
+                p.feed_line(l);
+            }
+            let w = p.error_text_for(false);
+            assert!(!w.contains("ALSA") && !w.contains("Settings > Advanced") && !w.contains("last error line"), "{w}");
+            assert!(w.contains(&p.last_error) && w.ends_with("Click Try again. If it keeps failing, click Copy details and share them when you ask for help."), "{w}");
+        }
+        // the Linux-only network words do not change the Windows text
+        let mut p = Progress::new(false);
+        p.feed_line("== (d) building");
+        p.feed_line("curl: (7) Failed to connect: Connection refused");
+        assert!(!p.error_text_for(false).contains("internet connection"));
+        assert!(p.error_text_for(true).contains("internet connection"));
+    }
+
+    /// Review SF-B1: on Linux every failure of setup.sh's step (a) (the pre-checks and the system-toolchain checks) used to read
+    /// "check your internet connection" and hid the real ERROR line. These are the real texts of setup.sh.
+    const SETUP_SH_STEP_A_ERRORS: [&str; 12] = [
+        "this setup is for Linux (uname says Darwin)",
+        "this setup is for 64-bit Intel/AMD PCs (x86_64); this machine is aarch64",
+        "cannot create /mnt/sd/rac/toolchain/tmp (is this folder writable?)",
+        "programs cannot run from this folder (/run/media/deck/SD/rac): the drive is mounted without permission to run programs, or it is a FAT/exFAT drive. Use a folder on your Linux drive (for the Steam Deck: the internal drive, or an SD card formatted as ext4).",
+        "this folder's drive cannot make symbolic links (/run/media/deck/SD/rac; FAT/exFAT?). Use a folder on your Linux drive (for the Steam Deck: the internal drive, or an SD card formatted as ext4).",
+        "libasound.so.2 (sound) is missing, and the game cannot be built without it. Install it with: sudo apt install libasound2t64 (libasound2 on older Debian/Ubuntu)",
+        "libudev.so.1 (controllers) is missing, and the game cannot be built without it. Install it with: sudo pacman -S systemd-libs",
+        "cargo not found (install the rust toolchain: https://rustup.rs)",
+        "python3 not found (the generators need it)",
+        "no C compiler found (cc/gcc): install gcc, pkg-config and the libasound2-dev / libudev-dev packages, or drop --system-toolchain",
+        "Rust 1.80.0 is too old (1.90 or newer is needed, 1.99 is what the game is tested with). Install a current Rust with rustup: https://rustup.rs",
+        "the downloaded Python does not run on this system",
+    ];
+
+    fn step_a_failure(update: bool, err: &str, linux: bool) -> String {
+        let mut p = Progress::new(update);
+        p.feed_line(if update { "== (u) update" } else { "== (a) tools" });
+        p.feed_line("  using your own Rust, Python and C compiler (--system-toolchain)");
+        p.feed_line(&format!("ERROR: {err}"));
+        p.error_text_for(linux)
+    }
+
+    #[test]
+    fn linux_step_a_errors_show_the_real_setup_sh_text_not_the_internet_hint() {
+        for e in SETUP_SH_STEP_A_ERRORS {
+            let t = step_a_failure(false, e, true);
+            assert!(t.starts_with("The step 'Download tools' did not finish."), "{e}: {t}");
+            assert!(t.contains(e), "the ERROR text is shown: {e}\n{t}");
+            assert!(!t.contains("internet"), "{e}: {t}");
+            assert!(t.contains("Try again") && t.contains("Copy details"), "{e}: {t}");
+            // setup.sh's own text is the answer: no extra library hint on top (the cc line names the -dev packages in passing)
+            assert!(!t.contains("The sound library ALSA") && !t.contains("The device library libudev") && !t.contains("Settings > Advanced") && !t.contains("The last error line was"), "{e}: {t}");
+        }
+        // an update run (step (u), index 0) that fails the same way shows the text too
+        let t = step_a_failure(true, "python3 not found (the update tool needs it)", true);
+        assert!(t.contains("python3 not found (the update tool needs it)") && !t.contains("internet") && t.contains("Play old version"), "{t}");
+        let t = step_a_failure(true, "tools/update_apply.py is missing (the update tool); download the release again", true);
+        assert!(t.contains("update_apply.py is missing") && !t.contains("internet"), "{t}");
+    }
+
+    #[test]
+    fn linux_step_a_network_failures_still_say_to_check_the_connection() {
+        for e in [
+            "could not download https://static.rust-lang.org/dist/rust-1.99.0.tar.xz (check the internet connection, then run setup.sh again)",
+            "could not download https://ziglang.org/download/0.14.1/zig-linux-x86_64-0.14.1.tar.xz (check the internet connection, then run setup.sh again)",
+        ] {
+            let t = step_a_failure(false, e, true);
+            assert!(t.contains("Please check your internet connection, then click Try again."), "{t}");
+        }
+        // curl's own words, as printed before setup.sh's ERROR line
+        let mut p = Progress::new(false);
+        p.feed_line("== (a) tools");
+        p.feed_line("curl: (6) Could not resolve host: static.rust-lang.org");
+        p.feed_line("ERROR: could not download https://static.rust-lang.org/dist/x.tar.xz (check the internet connection, then run setup.sh again)");
+        assert!(p.error_text_for(true).contains("internet connection"));
+        // a stop in step (a) with no ERROR line at all keeps the old network text
+        let mut p = Progress::new(false);
+        p.feed_line("== (a) tools");
+        p.feed_line("  downloading Rust 1.99.0 ...");
+        assert!(p.error_text_for(true).contains("internet connection"));
+        // network words win over an unrelated ERROR line text of the same step
+        let mut p = Progress::new(false);
+        p.feed_line("== (a) tools");
+        p.feed_line("curl: (7) Failed to connect to static.rust-lang.org port 443: Connection refused");
+        p.feed_line("ERROR: stopped");
+        assert!(p.error_text_for(true).contains("internet connection"));
+    }
+
+    #[test]
+    fn windows_step_0_failures_keep_the_internet_text() {
+        // the Windows texts do not change: step 0 is only downloads there, an ERROR line or not
+        for e in SETUP_SH_STEP_A_ERRORS.iter().take(3).chain(["could not download https://x/y.zip"].iter()) {
+            let t = step_a_failure(false, e, false);
+            assert!(t.contains("Please check your internet connection, then click Try again. Setup continues where it stopped."), "{e}: {t}");
+            assert!(!t.contains(e), "{t}");
+        }
+        let mut p = Progress::new(false);
+        p.feed_line("== (a) tools");
+        assert!(p.error_text_for(false).contains("internet connection"));
     }
 
     #[test]

@@ -232,9 +232,9 @@ impl App {
                         self.toast(format!("The log folder could not be opened: {e}"), true);
                     }
                 }
-                if theme::button(ui, "Create desktop shortcut") {
+                if theme::button(ui, if cfg!(windows) { "Create desktop shortcut" } else { "Add to applications menu" }) {
                     match self.create_shortcut() {
-                        Ok(_) => self.toast("Desktop shortcut created.", false),
+                        Ok(_) => self.toast(if cfg!(windows) { "Desktop shortcut created." } else { "Added to the applications menu." }, false),
                         Err(e) => self.toast(format!("Could not create the shortcut: {e}"), true),
                     }
                 }

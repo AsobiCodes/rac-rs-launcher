@@ -183,7 +183,7 @@ impl App {
         ui.add_space(6.0);
         ui.separator();
         ui.label(theme::bold("Add existing install", 15.5));
-        ui.label(theme::muted("Pick the folder of a RAC-RS game that was set up before. It must hold the files VERSION and setup.ps1 and the built game."));
+        ui.label(theme::muted(&format!("Pick the folder of a RAC-RS game that was set up before. It must hold the files VERSION and {} and the built game.", library::SETUP_SCRIPT)));
         if let Some(t) = self.folder_field(ui, &text, "Folder of the game", Purpose::AddInstall) {
             self.lib_ui.dialog = Some(AddDialog::Existing { text: t });
             self.lib_ui.message = None;
@@ -224,7 +224,7 @@ impl App {
         ui.add_space(6.0);
         ui.separator();
         ui.label(theme::bold("New install", 15.5));
-        ui.label(theme::muted("Where should the game live? It needs about 5 GB. You can change the folder."));
+        ui.label(theme::muted(&format!("Where should the game live? It needs about {} GB. You can change the folder.", library::NEEDED_GB)));
         if let Some(t) = self.folder_field(ui, &text, "Folder for the game", Purpose::NewInstall) {
             self.lib_ui.dialog = Some(AddDialog::New { text: t });
             self.lib_ui.message = None;

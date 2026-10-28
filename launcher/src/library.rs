@@ -1,6 +1,6 @@
 //! The library: the list of game installs the launcher knows (id, game, folder, added date).
 //!
-//! Where the library file lives (`data_dir`): next to the launcher exe when the exe sits inside a game folder (VERSION + setup.ps1 next to it)
+//! Where the library file lives (`data_dir`): next to the launcher exe when the exe sits inside a game folder (VERSION + setup script next to it)
 //! or a `portable.txt` file is next to it; otherwise `%APPDATA%\RAC-RS Launcher\` (Linux: `$XDG_DATA_HOME/RAC-RS Launcher/`). `launcher.cfg` lives in the same folder.
 //! The library only stores paths: removing an entry never deletes files.
 use crate::games::{self, GameDef};
@@ -9,8 +9,12 @@ use std::path::{Path, PathBuf};
 
 pub const LIBRARY_FILE: &str = "library.json";
 pub const PORTABLE_MARKER: &str = "portable.txt";
-/// The space a new install needs (game build, toolchain, generated code) in bytes: about 5 GB.
-pub const NEEDED_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// The setup script of a game folder on this system.
+pub const SETUP_SCRIPT: &str = if cfg!(windows) { "setup.ps1" } else { "setup.sh" };
+/// The space a new install needs in GB (Windows: game build, toolchain, generated code; Linux: the pinned toolchain and the C linker come on top).
+pub const NEEDED_GB: u64 = if cfg!(windows) { 5 } else { 7 };
+/// The same in bytes.
+pub const NEEDED_BYTES: u64 = NEEDED_GB * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibEntry {
@@ -74,13 +78,13 @@ pub enum DataMode {
 pub struct Found {
     pub game: &'static str,
     pub version: String,
-    /// The game is built (exe + Play.cmd + generated\play.cfg); false = an unpacked release that is not set up yet.
+    /// The game is built (exe + play script + generated\play.cfg); false = an unpacked release that is not set up yet.
     pub installed: bool,
 }
 
-/// VERSION and setup.ps1 are there: a rac-rs release tree (set up or not).
+/// VERSION and the setup script (setup.ps1 / setup.sh) are there: a rac-rs release tree (set up or not).
 pub fn is_release_tree(dir: &Path) -> bool {
-    dir.join("VERSION").is_file() && dir.join("setup.ps1").is_file()
+    dir.join("VERSION").is_file() && dir.join(SETUP_SCRIPT).is_file()
 }
 
 /// The data folder for the launcher exe in `exe_dir` (`appdata` = the %APPDATA% folder).
@@ -103,7 +107,7 @@ pub fn check_folder(dir: &Path) -> Result<Found, String> {
         return Err("That folder does not exist.".to_string());
     }
     if !is_release_tree(dir) {
-        return Err("This is not a RAC-RS game folder. It must hold the files VERSION and setup.ps1.".to_string());
+        return Err(format!("This is not a RAC-RS game folder. It must hold the files VERSION and {SETUP_SCRIPT}."));
     }
     let version = games::local_version(dir);
     for g in games::GAMES.iter().filter(|g| g.supported) {
@@ -114,13 +118,26 @@ pub fn check_folder(dir: &Path) -> Result<Found, String> {
     Err(format!("This folder holds RAC-RS {version}, but the game was not set up here yet (its game files are missing). Use \"New install\" and choose this folder to set it up."))
 }
 
-/// Folder compare without touching the disk: case-insensitive, `/` = `\`, no trailing separator.
+/// Folder compare without touching the disk. Windows: case-insensitive, `/` = `\`, no trailing separator.
+/// Linux: the names are case-sensitive and `\` is an ordinary character; only trailing `/` is dropped.
 pub fn norm(p: &Path) -> String {
-    let mut s = p.to_string_lossy().replace('/', "\\").to_lowercase();
-    while s.len() > 3 && s.ends_with('\\') {
-        s.pop();
+    norm_for(cfg!(windows), p)
+}
+
+pub fn norm_for(windows: bool, p: &Path) -> String {
+    if windows {
+        let mut s = p.to_string_lossy().replace('/', "\\").to_lowercase();
+        while s.len() > 3 && s.ends_with('\\') {
+            s.pop();
+        }
+        s
+    } else {
+        let mut s = p.to_string_lossy().to_string();
+        while s.len() > 1 && s.ends_with('/') {
+            s.pop();
+        }
+        s
     }
-    s
 }
 
 pub fn same_folder(a: &Path, b: &Path) -> bool {
@@ -148,9 +165,17 @@ pub fn date_of(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// `Documents\RAC-RS\Ratchet & Clank`, the folder a new install suggests.
+/// The folder a new install suggests. Windows: `Documents\RAC-RS\Ratchet & Clank`. Linux: `$HOME/Games/Ratchet & Clank`.
 pub fn default_install_folder() -> PathBuf {
-    crate::platform::known_folder(crate::platform::Known::Documents).unwrap_or_else(|| PathBuf::from(".")).join("RAC-RS").join("Ratchet & Clank")
+    default_install_folder_for(cfg!(windows), crate::platform::known_folder(crate::platform::Known::Documents), std::env::var_os("HOME").map(PathBuf::from))
+}
+
+pub fn default_install_folder_for(windows: bool, documents: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    if windows {
+        documents.unwrap_or_else(|| PathBuf::from(".")).join("RAC-RS").join("Ratchet & Clank")
+    } else {
+        home.or(documents).unwrap_or_else(|| PathBuf::from(".")).join("Games").join("Ratchet & Clank")
+    }
 }
 
 /// Free bytes on the drive that holds `dir` (or its nearest existing parent). None = unknown.
@@ -289,7 +314,8 @@ mod tests {
 
     /// A built install in `dir`.
     pub fn make_install(dir: &Path, version: &str) {
-        for (f, t) in [("VERSION", format!("{version}\n")), ("setup.ps1", "x".into()), ("Play.cmd", "x".into()), ("build/release/rac-rs.exe", "x".into()), ("generated/play.cfg", "iso=C:\\none.iso\n".into())] {
+        let exe = format!("build/release/{}", games::exe_name_for(cfg!(windows), "rac-rs.exe"));
+        for (f, t) in [("VERSION", format!("{version}\n")), (SETUP_SCRIPT, "x".into()), (games::PLAY_SCRIPT, "x".into()), (exe.as_str(), "x".into()), ("generated/play.cfg", "iso=C:\\none.iso\n".into())] {
             let p = dir.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, t).unwrap();
@@ -342,8 +368,8 @@ mod tests {
         make_install(&inst, "0.4.0");
         let e = lib.add_existing(&inst).unwrap();
         assert_eq!((e.game.as_str(), e.id.as_str()), ("rac1", "rac1"));
-        // same folder, other spelling
-        let other = PathBuf::from(inst.to_string_lossy().to_uppercase().replace('\\', "/") + "/");
+        // same folder, other spelling (Windows: case and separators do not matter; Linux: a trailing slash does not)
+        let other = if cfg!(windows) { PathBuf::from(inst.to_string_lossy().to_uppercase().replace('\\', "/") + "/") } else { PathBuf::from(inst.to_string_lossy().to_string() + "/") };
         assert!(lib.add_existing(&other).unwrap_err().contains("already"));
         // a second install gets another id
         let inst2 = scratch("add_inst2");
@@ -354,7 +380,7 @@ mod tests {
         assert!(lib.add_existing(&d).unwrap_err().contains("not a RAC-RS game folder"));
         let unbuilt = scratch("add_unbuilt");
         std::fs::write(unbuilt.join("VERSION"), "0.4.0\n").unwrap();
-        std::fs::write(unbuilt.join("setup.ps1"), "x").unwrap();
+        std::fs::write(unbuilt.join(SETUP_SCRIPT), "x").unwrap();
         assert!(lib.add_existing(&unbuilt).unwrap_err().contains("not set up"));
         assert_eq!(lib.entries.len(), 2);
     }
@@ -369,7 +395,7 @@ mod tests {
         assert!(lib.remove(&e.id));
         assert!(!lib.remove(&e.id));
         assert!(lib.entries.is_empty());
-        assert!(inst.join("VERSION").is_file() && inst.join("build/release/rac-rs.exe").is_file());
+        assert!(inst.join("VERSION").is_file() && games::game_by_id("rac1").unwrap().exe_path(&inst).is_file());
     }
 
     #[test]
@@ -395,8 +421,9 @@ mod tests {
         assert!(b.backup && b.pinned);
         assert_eq!(b.title(g), "RAC1 v0.3.1 (backup)");
         assert_ne!(b.id, main.id);
-        // the same folder again gives the same entry
-        assert_eq!(lib.add_backup(g, Path::new("d:/games/rac1 (backup v0.3.1)"), "other").id, b.id);
+        // the same folder again gives the same entry (Windows: other case and separators)
+        let again_path = if cfg!(windows) { "d:/games/rac1 (backup v0.3.1)" } else { "D:\\Games\\RAC1 (backup v0.3.1)/" };
+        assert_eq!(lib.add_backup(g, Path::new(again_path), "other").id, b.id);
         lib.save().unwrap();
         let again = Library::load(&d);
         assert_eq!(again.entries, lib.entries);
@@ -405,6 +432,29 @@ mod tests {
         std::fs::write(d.join(LIBRARY_FILE), r#"{"installs":[{"id":"rac1","game":"rac1","folder":"X","added":"2026-10-01","pinned":true}]}"#).unwrap();
         let old = Library::load(&d);
         assert!(!old.entries[0].backup && old.entries[0].name.is_empty() && old.entries[0].pinned);
+    }
+
+    #[test]
+    fn folder_compare_per_system() {
+        // Windows: case-insensitive, / = \, no trailing separator (a drive root keeps its backslash)
+        assert_eq!(norm_for(true, Path::new("D:/Games/RAC1/")), "d:\\games\\rac1");
+        assert_eq!(norm_for(true, Path::new("C:\\")), "c:\\");
+        // Linux: names are case-sensitive, a backslash is a letter, trailing slashes go, the root stays
+        assert_eq!(norm_for(false, Path::new("/home/p/Games/Ratchet & Clank/")), "/home/p/Games/Ratchet & Clank");
+        assert_ne!(norm_for(false, Path::new("/home/p/Games")), norm_for(false, Path::new("/home/p/games")));
+        assert_ne!(norm_for(false, Path::new("/a/b\\c")), norm_for(false, Path::new("/a/b/c")));
+        assert_eq!(norm_for(false, Path::new("/")), "/");
+    }
+
+    #[test]
+    fn default_folder_per_system() {
+        let docs = Some(PathBuf::from("D:\\Docs"));
+        let home = Some(PathBuf::from("/home/p"));
+        assert_eq!(default_install_folder_for(true, docs.clone(), home.clone()), PathBuf::from("D:\\Docs").join("RAC-RS").join("Ratchet & Clank"));
+        assert_eq!(default_install_folder_for(false, docs.clone(), home), PathBuf::from("/home/p").join("Games").join("Ratchet & Clank"));
+        assert_eq!(default_install_folder_for(false, docs, None), PathBuf::from("D:\\Docs").join("Games").join("Ratchet & Clank"));
+        assert_eq!(NEEDED_BYTES, NEEDED_GB * 1024 * 1024 * 1024);
+        assert_eq!(NEEDED_GB, if cfg!(windows) { 5 } else { 7 });
     }
 
     #[test]

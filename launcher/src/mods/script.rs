@@ -3,6 +3,7 @@
 //! It checks those by the loader's rules (a mod the game would refuse shows an error line and cannot be switched on); the parts only the
 //! game needs (scripts, hooks, plugin files, requires, conflicts) are the game's to judge, so a mod is never blocked here for them.
 use super::settings::{parse_presets, parse_settings, Preset, SettingDef};
+use super::update::UpdateSource;
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 
@@ -28,6 +29,8 @@ pub struct ScriptMod {
     pub games: BTreeMap<String, Vec<String>>,
     pub settings: Vec<SettingDef>,
     pub presets: Vec<Preset>,
+    /// `"update": {"github": "owner/repo"}`: where the mod's releases live (see `update`). A missing or invalid key is None, never an error.
+    pub update: Option<UpdateSource>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +114,7 @@ pub fn parse(text: &str) -> Parsed {
         games,
         settings,
         presets,
+        update: UpdateSource::from_manifest(obj),
     }))
 }
 
@@ -194,6 +198,21 @@ mod tests {
         let Parsed::Mod(m) = parse(t) else { panic!() };
         assert_eq!((m.kind.as_str(), m.kind_label()), ("native", "Native mod"));
         assert!(!m.has_settings() && m.author.is_empty());
+    }
+
+    #[test]
+    fn the_update_key_is_read_and_a_missing_or_odd_one_is_ignored() {
+        let Parsed::Mod(plain) = parse(ARSENAL) else { panic!() };
+        assert_eq!(plain.update, None, "the shipped manifest has no update source yet");
+        let with = ARSENAL.replacen("\"format\": 2,", "\"format\": 2, \"update\": { \"github\": \"AsobiCodes/arsenal-mastery\" },", 1);
+        let Parsed::Mod(m) = parse(&with) else { panic!("{:?}", parse(&with)) };
+        assert_eq!(m.update.as_ref().map(|u| u.slug()).as_deref(), Some("AsobiCodes/arsenal-mastery"));
+        assert_eq!(m.settings.len(), 13, "the rest of the manifest reads as before");
+        for odd in ["\"update\": 5,", "\"update\": { \"github\": \"nope\" },", "\"update\": { \"gitlab\": \"a/b\" },"] {
+            let t = ARSENAL.replacen("\"format\": 2,", &format!("\"format\": 2, {odd}"), 1);
+            let Parsed::Mod(m) = parse(&t) else { panic!("{odd}: {:?}", parse(&t)) };
+            assert_eq!(m.update, None, "{odd}");
+        }
     }
 
     #[test]

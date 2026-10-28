@@ -8,6 +8,7 @@ pub mod page_library;
 pub mod page_mods;
 pub mod page_mods_master;
 pub mod page_mods_script;
+pub mod page_mods_update;
 pub mod page_net;
 pub mod page_settings;
 pub mod presets;

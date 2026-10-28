@@ -2,7 +2,7 @@
 //! VERSION and CHANGELOG.md come from github.com/AsobiCodes/rac-rs (main); the update itself is done by the setup.ps1 -ApplyUpdate worker
 //! (see engine.rs). A test base (folder, file:// or http URL that serves VERSION and CHANGELOG.md) replaces GitHub.
 use crate::games::is_version;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,15 +22,27 @@ pub fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
     na.cmp(&nb).then_with(|| pb.cmp(&pa))
 }
 
+/// A test base that is a folder on this PC (a plain path or a `file://` URL); None for an http(s) URL.
+/// `file:///E:/x` is a Windows drive path (the slash before the drive letter goes); `file:///tmp/x` keeps its root slash.
+pub fn local_base(base: &str) -> Option<PathBuf> {
+    let base = base.trim();
+    if base.starts_with("http://") || base.starts_with("https://") {
+        return None;
+    }
+    let Some(rest) = base.strip_prefix("file://") else { return Some(PathBuf::from(base)) };
+    let b = rest.as_bytes();
+    if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+        Some(PathBuf::from(&rest[1..]))
+    } else {
+        Some(PathBuf::from(rest))
+    }
+}
+
 /// Text of VERSION / CHANGELOG.md; None on any failure, never panics.
 pub fn read_remote(base: Option<&str>, name: &str, timeout: Duration) -> Option<String> {
     let base = base.unwrap_or(REPO_RAW);
-    if let Some(rest) = base.strip_prefix("file://") {
-        let rest = rest.trim_start_matches('/');
-        return std::fs::read_to_string(Path::new(rest).join(name)).ok();
-    }
-    if !(base.starts_with("http://") || base.starts_with("https://")) {
-        return std::fs::read_to_string(Path::new(base).join(name)).ok();
+    if let Some(dir) = local_base(base) {
+        return std::fs::read_to_string(dir.join(name)).ok();
     }
     http_get(&format!("{}/{}", base.trim_end_matches('/'), name), timeout)
 }
@@ -114,7 +126,7 @@ pub fn evaluate(local: &str, built: &str, remote_version: Option<&str>, changelo
 }
 
 /// Runs the check on a thread; the result lands in `slot`.
-pub fn check_async(local: String, built: String, base: Option<String>, root: std::path::PathBuf, slot: Arc<Mutex<UpdateState>>) {
+pub fn check_async(local: String, built: String, base: Option<String>, root: PathBuf, slot: Arc<Mutex<UpdateState>>) {
     std::thread::spawn(move || {
         let t = Duration::from_millis(4000);
         let rv = read_remote(base.as_deref(), "VERSION", t);
@@ -179,6 +191,16 @@ mod tests {
             UpdateState::Available(o) => assert!(o.finish && o.to == "0.4.0"),
             s => panic!("{s:?}"),
         }
+    }
+
+    #[test]
+    fn local_bases_are_told_from_urls() {
+        assert_eq!(local_base("https://example.com/x"), None);
+        assert_eq!(local_base("http://localhost:8000"), None);
+        assert_eq!(local_base("file:///E:/base/x"), Some(PathBuf::from("E:/base/x")));
+        assert_eq!(local_base("file:///tmp/base"), Some(PathBuf::from("/tmp/base")));
+        assert_eq!(local_base("/home/p/base"), Some(PathBuf::from("/home/p/base")));
+        assert_eq!(local_base(" D:\\base "), Some(PathBuf::from("D:\\base")));
     }
 
     #[test]

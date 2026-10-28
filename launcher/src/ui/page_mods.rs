@@ -1,6 +1,7 @@
 //! The Mods tab: list of installed mods (switch on/off, priority, details, remove), adding a mod from a .zip or folder or PCSX2's textures
 //! folder (with a preview and progress).
 use super::page_mods_script::{self, Changes, PanelState};
+use super::page_mods_update;
 use super::state::{App, Purpose};
 use super::theme::{self, Icon};
 use crate::gating;
@@ -85,11 +86,11 @@ fn kind_text(kind: &str) -> &str {
 
 impl App {
     /// The selected profile's active.txt (None = the one in the mods folder).
-    fn mods_ui_active_file(&self) -> Option<PathBuf> {
+    pub(super) fn mods_ui_active_file(&self) -> Option<PathBuf> {
         (!self.profile_id.is_empty()).then(|| self.profiles.active_file(&self.profile_id))
     }
 
-    fn mods_dir(&self) -> PathBuf {
+    pub(super) fn mods_dir(&self) -> PathBuf {
         self.rac1().mods_dir(&self.root)
     }
 
@@ -106,6 +107,7 @@ impl App {
     pub fn mods_poll(&mut self) {
         self.mods_poll_reading();
         self.mods_poll_importing();
+        self.mods_update_poll();
     }
 
     fn mods_poll_reading(&mut self) {
@@ -170,12 +172,14 @@ impl App {
             });
             ui.add_space(4.0);
         }
+        self.mods_update_checks();
         self.mods_master_card(ui);
         ui.add_space(4.0);
         let running = self.read_only();
         ui.add_enabled_ui(!running, |ui| {
             self.mods_toolbar(ui);
             self.mods_add_panel(ui);
+            self.mods_update_card(ui);
         });
         ui.add_space(2.0);
         if self.mods_ui.store.entries.is_empty() && matches!(self.mods_ui.add, AddState::None) {
@@ -229,6 +233,7 @@ impl App {
             if theme::button_enabled(ui, "Import from PCSX2", !busy) {
                 self.mods_pcsx2_list();
             }
+            self.mods_get_buttons(ui);
             if theme::button(ui, "Open mods folder") {
                 let d = self.mods_dir();
                 let _ = std::fs::create_dir_all(&d);
@@ -373,6 +378,8 @@ impl App {
         let mut changes: Changes = Vec::new();
         let given = e.script.as_ref().map(|m| self.mods_ui.settings.mod_values(&m.id)).unwrap_or_default();
         let (newer, broken) = (self.mods_ui.settings.newer, self.mods_ui.settings.broken.clone());
+        let upd = self.mod_update_view(&e);
+        let mut upd_clicks = page_mods_update::UpdateClicks::default();
         let panel = &mut self.mods_ui.panel;
         let selected = self.mods_ui.selected.as_deref() == Some(id);
         let edge = if on && !held { theme::ORANGE } else { theme::LINE };
@@ -409,6 +416,9 @@ impl App {
                         if let Some(w) = warn.as_ref().or(block.as_ref()) {
                             ui.label(RichText::new(w).color(theme::ORANGE).size(13.0));
                         }
+                        let c = page_mods_update::strip(ui, &upd);
+                        upd_clicks.update |= c.update;
+                        upd_clicks.notes |= c.notes;
                         if !side_by_side {
                             ui.add_space(4.0);
                             ui.horizontal_wrapped(|ui| clicks = btn.draw(ui, false));
@@ -429,8 +439,10 @@ impl App {
                 if selected {
                     ui.separator();
                     mod_details(ui, &e);
+                    upd_clicks.recheck |= page_mods_update::details(ui, &upd).recheck;
                 }
             });
+        self.mod_update_actions(&e, upd_clicks);
         self.script_settings_actions(&e, settings_toggle, changes);
         self.mod_row_actions(id, toggle, mv, details, remove, selected);
         if self.mods_ui.confirm_remove.as_deref() == Some(id) {

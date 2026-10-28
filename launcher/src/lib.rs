@@ -10,6 +10,7 @@ pub mod gating;
 pub mod library;
 pub mod mods;
 pub mod pcopts;
+pub mod picker;
 pub mod platform;
 pub mod play;
 pub mod profiles;

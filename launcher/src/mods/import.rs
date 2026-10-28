@@ -103,7 +103,7 @@ fn walk(dir: &Path, base: &Path, out: &mut Vec<Entry>, rs: Option<&ReadState>) -
 /// The zip crate's default (`ArchiveOffset::Detect`) scans the WHOLE file for the central directory's signature, to cope with junk in front
 /// of the archive: on the 6.4 GB SCUS-97199 pack that is 15 to 90 seconds of reading before the first entry. Offset 0 (every normal .zip) is
 /// checked with one read; only when that fails the slow detection is tried (a .zip with a self-extractor in front).
-fn open_zip(z: &Path) -> Result<zip::ZipArchive<std::fs::File>, String> {
+pub(super) fn open_zip(z: &Path) -> Result<zip::ZipArchive<std::fs::File>, String> {
     let open = || std::fs::File::open(z).map_err(|e| format!("The zip could not be opened: {e}"));
     let quick = zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) };
     match zip::ZipArchive::with_config(quick, open()?) {
@@ -281,7 +281,7 @@ fn safe_component(c: &str) -> Option<String> {
 }
 
 /// Relative path that stays inside the folder (no `..`, no drive, no empty parts) and can be created on Windows (see `safe_component`).
-fn safe_rel(rel: &str) -> Option<PathBuf> {
+pub(super) fn safe_rel(rel: &str) -> Option<PathBuf> {
     let mut p = PathBuf::new();
     for c in rel.split(['/', '\\']) {
         p.push(safe_component(c)?);

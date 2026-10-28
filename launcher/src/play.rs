@@ -45,8 +45,16 @@ pub fn start(root: &Path, game: &GameDef) -> Result<Child, String> {
 /// `set "RAC_PLAYER_DIR=%~dp0player"`, i.e. `<install>\player` (memory card `card.bin`, safety copies `card.start1.bin` / `card.start2.bin`).
 /// Reads the line from the install's own Play.cmd when there is one, so a later version that moves it is followed; else `player`.
 pub fn saves_dir(root: &Path) -> PathBuf {
-    let text = std::fs::read_to_string(root.join("Play.cmd")).unwrap_or_default();
-    root.join(saves_rel(&text))
+    root.join(saves_rel_of(root))
+}
+
+/// The saves folder of an install, relative to it. Windows: from its Play.cmd. Linux: play.sh sets no folder, the game uses `player`.
+pub fn saves_rel_of(root: &Path) -> String {
+    if cfg!(windows) {
+        saves_rel(&std::fs::read_to_string(root.join("Play.cmd")).unwrap_or_default())
+    } else {
+        saves_rel("")
+    }
 }
 
 pub fn saves_rel(play_cmd: &str) -> String {
@@ -121,7 +129,7 @@ mod tests {
         std::fs::create_dir_all(d.join("build/release")).unwrap();
         let g = game_by_id("rac1").unwrap();
         assert!(check_ready(&d, g).unwrap_err().contains("not built yet"));
-        std::fs::write(d.join("build/release/rac-rs.exe"), b"x").unwrap();
+        std::fs::write(g.exe_path(&d), b"x").unwrap();
         assert!(check_ready(&d, g).unwrap_err().contains("setup information"));
         std::fs::create_dir_all(d.join("generated")).unwrap();
         std::fs::write(d.join("generated/play.cfg"), "iso=Z:\\gone.iso\n").unwrap();
@@ -149,13 +157,25 @@ rem {v}
         assert_eq!(saves_rel("set \"RAC_PLAYER_DIR=%~dp0saves/\""), "saves");
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_saves_are_always_player() {
+        // play.sh sets no save folder; even a Play.cmd left from a copied Windows folder is ignored
+        let d = std::env::temp_dir().join(format!("racl_saves_linux_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("Play.cmd"), "set \"RAC_PLAYER_DIR=%~dp0saves\"\r\n").unwrap();
+        assert_eq!(saves_dir(&d), d.join("player"));
+        assert_eq!(saves_rel_of(&d), "player");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn log_lives_in_the_saves_folder() {
         let d = std::env::temp_dir().join(format!("racl_log_{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         assert_eq!(log_file(&d), d.join("player").join("log.txt"));
         std::fs::write(d.join("Play.cmd"), "set \"RAC_PLAYER_DIR=%~dp0saves\"\r\n").unwrap();
-        assert_eq!(log_file(&d), d.join("saves").join("log.txt"));
+        assert_eq!(log_file(&d), d.join(if cfg!(windows) { "saves" } else { "player" }).join("log.txt"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -10,7 +10,9 @@ pub mod detect;
 pub mod import;
 pub mod keys;
 pub mod script;
+pub mod semver;
 pub mod settings;
+pub mod update;
 
 use crate::platform;
 pub use active::{Master, Masters};
@@ -212,7 +214,10 @@ impl ModStore {
         let text = std::fs::read(active_file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut entries = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
+            // folder-name order, not the file system's: with two mods of the same id the first folder always wins (NTFS lists A-Z, ext4 by hash)
+            let mut dirs: Vec<std::fs::DirEntry> = rd.flatten().collect();
+            dirs.sort_by_key(|e| e.file_name());
+            for e in dirs {
                 let p = e.path();
                 if !p.is_dir() {
                     continue;

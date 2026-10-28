@@ -5,7 +5,8 @@ nettest/
 flow_base/
 test_install/
 test_install_old/
-linux_tools/
+linux_tools/*
+!linux_tools/zigld.py
 *.log
 *.part
 *.old

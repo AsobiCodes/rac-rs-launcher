@@ -190,7 +190,7 @@ impl App {
                         self.toast(format!("The log folder could not be opened: {e}"), true);
                     }
                 }
-                if theme::button(ui, "Create desktop shortcut") {
+                if theme::button(ui, if cfg!(windows) { "Create desktop shortcut" } else { "Add to applications menu" }) {
                     match self.create_shortcut() {
                         Ok(p) => self.toast(format!("Shortcut created: {}", p.display()), false),
                         Err(e) => self.toast(format!("The shortcut could not be made: {e}"), true),
@@ -205,6 +205,17 @@ impl App {
                     self.tab = super::state::Tab::Play;
                     self.goto_repair();
                 }
+            }
+            if self.show_toolchain_option && !self.is_backup() {
+                ui.separator();
+                ui.label(theme::bold("Tools for building the game", 15.5));
+                let mut on = self.cfg.use_system_toolchain;
+                let label = "Use my system's Rust and Python (advanced; needs gcc, pkg-config and the libasound and libudev development packages)";
+                if ui.checkbox(&mut on, label).changed() {
+                    self.cfg.use_system_toolchain = on;
+                    self.save_cfg();
+                }
+                ui.label(theme::muted("Off (the default): the launcher downloads the tools it needs and nothing is installed on your system. It applies the next time you install, update or repair."));
             }
             ui.separator();
             ui.label(theme::bold("Reset settings", 15.5));

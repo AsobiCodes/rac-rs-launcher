@@ -272,9 +272,9 @@ impl App {
                 this.disc_picker(ui);
                 if !repair {
                     ui.add_space(2.0);
-                    ui.checkbox(&mut this.shortcut_wanted, "Create a desktop shortcut");
+                    ui.checkbox(&mut this.shortcut_wanted, if cfg!(windows) { "Create a desktop shortcut" } else { "Add the launcher to the applications menu" });
                 }
-                ui.label(theme::muted("Needs about 5 GB of free disk space and an internet connection (once)."));
+                ui.label(theme::muted(&format!("Needs about {} GB of free disk space and an internet connection (once).", crate::library::NEEDED_GB)));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let ok = matches!(this.disc_state, DiscState::Ok(_)) && this.disc_path.is_some();

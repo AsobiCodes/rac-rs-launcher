@@ -21,7 +21,10 @@ pub const PACK_MIN_BYTES: u64 = 32 * 1024 * 1024;
 /// Written last into a finished backup (a folder without it is a leftover of a cut run).
 pub const MARKER: &str = "backup.txt";
 pub const CANCELLED: &str = "The backup was cancelled.";
-const TOP_FILES: [&str; 6] = ["VERSION", "Play.cmd", "CHANGELOG.md", "README.md", "LICENSE", "NOTICE.md"];
+/// `Play.cmd` on Windows, `play.sh` on Linux (the start script of the backup).
+fn top_files(windows: bool) -> [&'static str; 6] {
+    ["VERSION", if windows { "Play.cmd" } else { "play.sh" }, "CHANGELOG.md", "README.md", "LICENSE", "NOTICE.md"]
+}
 const FIXED_FILES: [&str; 4] = ["generated/play.cfg", "generated/built_version.txt", "oracle/stubs.txt", "oracle/hand/hand_skip.txt"];
 const MARGIN_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -150,6 +153,17 @@ fn add_dir(ops: &mut Vec<Op>, root: &Path, rel: &Path, skip: &dyn Fn(&Path) -> b
     }
 }
 
+/// A file beside the game exe that the game needs to run. Windows: every `.exe` and `.dll` (any case). Linux: the game binary itself
+/// (the name of the exe) and shared libraries (`*.so`, `*.so.1.2`); cargo's `.d` files and the like stay out.
+pub fn is_runtime_file(windows: bool, exe_name: &str, file: &str) -> bool {
+    if windows {
+        let ext = Path::new(file).extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+        ext == "exe" || ext == "dll"
+    } else {
+        file == exe_name || file.ends_with(".so") || file.contains(".so.")
+    }
+}
+
 /// The files the backup copies (no packs): see the module text. Pure reading, nothing is written.
 pub fn run_set(root: &Path, game: &GameDef) -> Vec<Op> {
     let mut ops = Vec::new();
@@ -158,7 +172,7 @@ pub fn run_set(root: &Path, game: &GameDef) -> Vec<Op> {
             ops.push(Op { rel: PathBuf::from(rel), size, mode: Mode::Copy, pack: None });
         }
     };
-    for f in TOP_FILES.iter().chain(FIXED_FILES.iter()) {
+    for f in top_files(cfg!(windows)).iter().chain(FIXED_FILES.iter()) {
         one(f);
     }
     // the exe and its DLLs (not the build caches in the folders below it)
@@ -167,10 +181,10 @@ pub fn run_set(root: &Path, game: &GameDef) -> Vec<Op> {
         let rel_dir = dir.strip_prefix(root).unwrap_or(Path::new("")).to_path_buf();
         let mut names: Vec<_> = std::fs::read_dir(dir).map(|rd| rd.flatten().filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false)).collect()).unwrap_or_default();
         names.sort_by_key(|e| e.file_name());
+        let exe_name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         for e in names {
             let p = PathBuf::from(e.file_name());
-            let ext = p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
-            if ext == "exe" || ext == "dll" {
+            if is_runtime_file(cfg!(windows), &exe_name, &p.to_string_lossy()) {
                 ops.push(Op { rel: rel_dir.join(&p), size: e.metadata().map(|m| m.len()).unwrap_or(0), mode: Mode::Copy, pack: None });
             }
         }
@@ -179,7 +193,7 @@ pub fn run_set(root: &Path, game: &GameDef) -> Vec<Op> {
         }
     }
     // the player's own data: a copy, never a link
-    let player = crate::play::saves_rel(&std::fs::read_to_string(root.join("Play.cmd")).unwrap_or_default());
+    let player = crate::play::saves_rel_of(root);
     add_dir(&mut ops, root, Path::new(&player), &|_| false);
     // a crash marker of the profiles belongs to the main install's run
     add_dir(&mut ops, root, Path::new(crate::profiles::DIR), &|r| r.file_name().map(|n| n == "running.txt").unwrap_or(false) && r.components().count() == 1);
@@ -188,7 +202,8 @@ pub fn run_set(root: &Path, game: &GameDef) -> Vec<Op> {
 
 /// The mods: small ones are copied, big ones are returned as packs (name, files with sizes).
 fn mods_split(root: &Path, game: &GameDef, ops: &mut Vec<Op>) -> Vec<(Pack, Vec<(PathBuf, u64)>)> {
-    let rel = Path::new(game.mods);
+    let rel_buf = game.mods_rel();
+    let rel = rel_buf.as_path();
     let dir = root.join(rel);
     let mut packs = Vec::new();
     let Ok(rd) = std::fs::read_dir(&dir) else { return packs };
@@ -219,7 +234,9 @@ fn mods_split(root: &Path, game: &GameDef, ops: &mut Vec<Op>) -> Vec<(Pack, Vec<
 
 /// Can `from` (a file in the install) be hard-linked into the folder `into_dir`? A probe link is made there and removed at once.
 pub fn can_link(from: &Path, into_dir: &Path) -> bool {
-    let probe = into_dir.join(format!(".racl_link_probe_{}", std::process::id()));
+    // one name per call: parallel plans (the tests, or two windows' threads) must not remove each other's probe
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let probe = into_dir.join(format!(".racl_link_probe_{}_{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let _ = std::fs::remove_file(&probe);
     let ok = std::fs::hard_link(from, &probe).is_ok();
     let _ = std::fs::remove_file(&probe);
@@ -251,7 +268,7 @@ pub fn plan(root: &Path, game: &GameDef, version: &str) -> Result<Plan, String> 
     let mut ops = run_set(root, game);
     let packs = mods_split(root, game, &mut ops);
     let parent = dest.parent().map(Path::to_path_buf).unwrap_or_default();
-    let link_ok = match packs.first().and_then(|(p, f)| f.first().map(|(r, _)| root.join(game.mods).join(&p.name).join(r))) {
+    let link_ok = match packs.first().and_then(|(p, f)| f.first().map(|(r, _)| root.join(game.mods_rel()).join(&p.name).join(r))) {
         Some(first) => can_link(&first, &parent),
         None => true,
     };
@@ -259,7 +276,7 @@ pub fn plan(root: &Path, game: &GameDef, version: &str) -> Result<Plan, String> 
     for (p, files) in packs {
         if link_ok {
             for (r, size) in files {
-                ops.push(Op { rel: Path::new(game.mods).join(&p.name).join(r), size, mode: Mode::Link, pack: Some(Path::new(game.mods).join(&p.name)) });
+                ops.push(Op { rel: game.mods_rel().join(&p.name).join(r), size, mode: Mode::Link, pack: Some(game.mods_rel().join(&p.name)) });
             }
         }
         list.push(p);
@@ -335,6 +352,52 @@ fn copy_file(src: &Path, dst: &Path, st: &State) -> Result<(), String> {
     Ok(())
 }
 
+/// The file whose `iso=` line names the disc (relative to the install).
+const PLAY_CFG: &str = "generated/play.cfg";
+
+/// `generated/play.cfg` as it must be written into a backup. setup.sh writes `iso=rom/x.iso` (relative to the install) for a disc inside
+/// the game folder; in a backup that path would point into the backup folder, where `rom/` is not copied (4+ GB), so "Play old version"
+/// could not find the disc. A relative `iso=` becomes the absolute path below the SOURCE install `root`; every other byte stays as it was
+/// (other lines, line endings, an absolute or empty `iso=`, a file without an `iso=` line). Windows (`windows` = true) is returned
+/// untouched: setup.ps1 writes absolute paths there, so the backup stays byte for byte the same as before.
+pub fn play_cfg_for_backup(text: &str, root: &Path, windows: bool) -> String {
+    if windows {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 64);
+    for line in text.split_inclusive('\n') {
+        match line.strip_prefix("iso=") {
+            Some(rest) => {
+                let value = rest.trim_end_matches(['\r', '\n']);
+                let tail = &rest[value.len()..];
+                let path = value.trim();
+                if !path.is_empty() && Path::new(path).is_relative() {
+                    out.push_str("iso=");
+                    out.push_str(&root.join(path).to_string_lossy());
+                    out.push_str(tail);
+                } else {
+                    out.push_str(line);
+                }
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
+/// Copies `generated/play.cfg` into the backup with `play_cfg_for_backup`. Not UTF-8 or unreadable: the plain byte copy.
+fn copy_play_cfg(src: &Path, dst: &Path, root: &Path, size: u64, st: &State) -> Result<(), String> {
+    let new = std::fs::read(src).ok().and_then(|b| String::from_utf8(b).ok()).map(|t| play_cfg_for_backup(&t, root, cfg!(windows)));
+    match new {
+        Some(t) => {
+            std::fs::write(dst, t).map_err(|e| format!("Could not write {}: {e}", dst.display()))?;
+            st.done_bytes.fetch_add(size, Ordering::Relaxed);
+            Ok(())
+        }
+        None => copy_file(src, dst, st),
+    }
+}
+
 fn marker_text(plan: &Plan) -> String {
     format!(
         "This folder is a backup of RAC-RS {} made by the RAC-RS Launcher before an update ({}).\nIt was made from {}.\nThe launcher never updates it. To go back, open it in the Library and press Play.\nTo remove it, use Delete backup in the launcher's Library.\n",
@@ -372,6 +435,7 @@ pub fn execute(plan: &Plan, st: &State) -> Result<(), String> {
             *c = op.rel.to_string_lossy().to_string();
         }
         match op.mode {
+            Mode::Copy if !cfg!(windows) && op.rel == Path::new(PLAY_CFG) => copy_play_cfg(&src, &dst, &plan.root, op.size, st)?,
             Mode::Copy => copy_file(&src, &dst, st)?,
             Mode::Link => {
                 if std::fs::hard_link(&src, &dst).is_err() {
@@ -466,16 +530,18 @@ pub mod tests {
     pub fn fake_install(root: &Path, version: &str) {
         put(&root.join("VERSION"), 6);
         std::fs::write(root.join("VERSION"), format!("{version}\n")).unwrap();
-        put(&root.join("setup.ps1"), 10);
+        put(&root.join(crate::library::SETUP_SCRIPT), 10);
         put(&root.join("Setup.cmd"), 10);
-        std::fs::write(root.join("Play.cmd"), "set \"RAC_PLAYER_DIR=%~dp0player\"\n").unwrap();
+        std::fs::write(root.join(crate::games::PLAY_SCRIPT), "set \"RAC_PLAYER_DIR=%~dp0player\"\n").unwrap();
         put(&root.join("CHANGELOG.md"), 10);
         put(&root.join("Cargo.toml"), 10);
         put(&root.join("RAC-RS Launcher.exe"), 10);
         put(&root.join("library.json"), 10);
         put(&root.join("launcher.cfg"), 10);
-        put(&root.join("build/release/rac-rs.exe"), 3000);
+        put(&root.join(exe_rel()), 3000);
         put(&root.join("build/release/dxcompiler.dll"), 2000);
+        put(&root.join("build/release/libdxcompiler.so"), 2000);
+        put(&root.join("build/release/libvk.so.1.3.2"), 2000);
         put(&root.join("build/release/rac-rs.d"), 500);
         put(&root.join("build/release/deps/big.rlib"), 5000);
         put(&root.join("build/release/incremental/x/y.bin"), 500);
@@ -500,6 +566,11 @@ pub mod tests {
         put(&root.join("mods/scratch.tmp/x.png"), 100);
     }
 
+    /// The game exe of the fake install, relative to the root.
+    pub fn exe_rel() -> String {
+        format!("build/release/{}", crate::games::exe_name_for(cfg!(windows), "rac-rs.exe"))
+    }
+
     fn rels(ops: &[Op]) -> Vec<String> {
         let mut v: Vec<String> = ops.iter().map(|o| o.rel.to_string_lossy().replace('\\', "/")).collect();
         v.sort();
@@ -515,12 +586,14 @@ pub mod tests {
         let mut packs = Vec::new();
         packs.extend(mods_split(&d, g, &mut ops));
         let r = rels(&ops);
+        let (exe, runtime_lib, other_os_lib) =
+            if cfg!(windows) { (exe_rel(), "build/release/dxcompiler.dll", "build/release/libvk.so.1.3.2") } else { (exe_rel(), "build/release/libvk.so.1.3.2", "build/release/dxcompiler.dll") };
         for need in [
             "VERSION",
-            "Play.cmd",
+            crate::games::PLAY_SCRIPT,
             "CHANGELOG.md",
-            "build/release/rac-rs.exe",
-            "build/release/dxcompiler.dll",
+            exe.as_str(),
+            runtime_lib,
             "generated/play.cfg",
             "generated/built_version.txt",
             "oracle/stubs.txt",
@@ -537,7 +610,8 @@ pub mod tests {
             assert!(r.contains(&need.to_string()), "missing {need}: {r:?}");
         }
         for no in [
-            "setup.ps1",
+            crate::library::SETUP_SCRIPT,
+            other_os_lib,
             "Setup.cmd",
             "Cargo.toml",
             "RAC-RS Launcher.exe",
@@ -562,9 +636,42 @@ pub mod tests {
     #[test]
     fn a_run_set_without_optional_files_is_not_an_error() {
         let d = scratch("runset_min");
-        put(&d.join("build/release/rac-rs.exe"), 10);
+        put(&d.join(exe_rel()), 10);
         let g = game_by_id("rac1").unwrap();
-        assert_eq!(rels(&run_set(&d, g)), vec!["build/release/rac-rs.exe".to_string()]);
+        assert_eq!(rels(&run_set(&d, g)), vec![exe_rel()]);
+    }
+
+    #[test]
+    fn runtime_files_per_system() {
+        // Windows: exe and dll in any case; nothing else
+        assert!(is_runtime_file(true, "rac-rs.exe", "rac-rs.exe") && is_runtime_file(true, "rac-rs.exe", "DXC.DLL") && is_runtime_file(true, "rac-rs.exe", "other.exe"));
+        assert!(!is_runtime_file(true, "rac-rs.exe", "rac-rs.d") && !is_runtime_file(true, "rac-rs.exe", "libx.so"));
+        // Linux: the game binary (the exe's own name) and shared libraries; cargo's side files and the pdb-like leftovers stay out
+        assert!(is_runtime_file(false, "rac-rs", "rac-rs") && is_runtime_file(false, "rac-rs", "libvk.so") && is_runtime_file(false, "rac-rs", "libvk.so.1.3.2"));
+        assert!(!is_runtime_file(false, "rac-rs", "rac-rs.d") && !is_runtime_file(false, "rac-rs", "rac-rs.pdb") && !is_runtime_file(false, "rac-rs", "other") && !is_runtime_file(false, "rac-rs", "dxcompiler.dll"));
+    }
+
+    #[test]
+    fn a_linux_style_install_gets_play_sh_the_binary_and_the_player_folder() {
+        // the start script of the backup follows the system, and only that one
+        assert!(top_files(false).contains(&"play.sh") && !top_files(false).contains(&"Play.cmd"));
+        assert!(top_files(true).contains(&"Play.cmd") && !top_files(true).contains(&"play.sh"));
+        assert_eq!(top_files(cfg!(windows))[1], crate::games::PLAY_SCRIPT);
+        // the walk over a Linux build folder keeps the binary and the libraries only
+        let kept: Vec<&str> = ["rac-rs", "libx.so", "rac-rs.d", "other"].into_iter().filter(|n| is_runtime_file(false, "rac-rs", n)).collect();
+        assert_eq!(kept, ["rac-rs", "libx.so"]);
+        // the real walk, on a Linux host (run_set uses this system's file names)
+        if cfg!(not(windows)) {
+            let d = scratch("runset_linux");
+            for f in ["VERSION", "play.sh", "build/release/rac-rs", "build/release/libx.so", "build/release/rac-rs.d", "setup.sh", "player/card.bin", "generated/play.cfg"] {
+                put(&d.join(f), 10);
+            }
+            let r = rels(&run_set(&d, game_by_id("rac1").unwrap()));
+            for need in ["VERSION", "play.sh", "build/release/rac-rs", "build/release/libx.so", "player/card.bin", "generated/play.cfg"] {
+                assert!(r.iter().any(|x| x == need), "{need} missing from {r:?}");
+            }
+            assert!(!r.iter().any(|x| x == "build/release/rac-rs.d" || x == "setup.sh"), "{r:?}");
+        }
     }
 
     #[test]
@@ -634,8 +741,8 @@ pub mod tests {
         // the backup holds the files, the marker, no setup.ps1
         let b = &p.dest;
         assert!(b.join(MARKER).is_file());
-        assert!(b.join("build/release/rac-rs.exe").is_file() && b.join("player/card.bin").is_file() && b.join("generated/play.cfg").is_file());
-        assert!(!b.join("setup.ps1").exists());
+        assert!(b.join(exe_rel()).is_file() && b.join("player/card.bin").is_file() && b.join("generated/play.cfg").is_file());
+        assert!(!b.join(crate::library::SETUP_SCRIPT).exists());
         assert_eq!(std::fs::read_to_string(b.join("VERSION")).unwrap().trim(), "0.3.1");
         assert!(crate::games::is_installed(b, g), "the backup counts as an installed game");
         // a pack file is the same file on the disk (writing through one name shows in the other); a player file is a separate copy
@@ -752,5 +859,66 @@ pub mod tests {
         assert!(can_link(&d.join("a/f.bin"), &d));
         assert!(std::fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".racl_link_probe")));
         assert!(!can_link(&d.join("a/missing.bin"), &d));
+    }
+
+    /// The backup's play.cfg (review SF-B2): a relative `iso=rom/x.iso` of a Linux install must name the disc of the SOURCE install, because
+    /// `rom/` is not copied and the backup folder has no disc.
+    #[test]
+    fn a_relative_iso_in_the_backups_play_cfg_becomes_the_source_installs_absolute_path() {
+        let root = std::env::temp_dir().join("racl_bak_src_install");
+        let cfg = "iso=rom/x.iso\nskip_hash=1\n";
+        let out = play_cfg_for_backup(cfg, &root, false);
+        assert_eq!(out, format!("iso={}\nskip_hash=1\n", root.join("rom/x.iso").display()));
+        assert!(Path::new(out.lines().next().unwrap().strip_prefix("iso=").unwrap()).is_absolute());
+        // line endings and the other lines are kept exactly (CRLF, no final newline, a space before the path)
+        let out = play_cfg_for_backup("a=1\r\niso=rom/y.iso\r\nb=2", &root, false);
+        assert_eq!(out, format!("a=1\r\niso={}\r\nb=2", root.join("rom/y.iso").display()));
+        let out = play_cfg_for_backup("iso=rom/z.iso", &root, false);
+        assert_eq!(out, format!("iso={}", root.join("rom/z.iso").display()));
+        let out = play_cfg_for_backup("iso= rom/w.iso \n", &root, false);
+        assert_eq!(out, format!("iso={}\n", root.join("rom/w.iso").display()));
+        // the first line of a file with other keys first, and a key that only ends in `iso=` is not the disc
+        let out = play_cfg_for_backup("my_iso=rom/q.iso\n", &root, false);
+        assert_eq!(out, "my_iso=rom/q.iso\n");
+    }
+
+    #[test]
+    fn an_absolute_empty_or_missing_iso_line_stays_byte_for_byte() {
+        let root = std::env::temp_dir().join("racl_bak_src_install");
+        let abs = std::env::temp_dir().join("elsewhere").join("rc.iso");
+        for cfg in [format!("iso={}\n", abs.display()), format!("x=1\r\niso={}\r\ny=2\r\n", abs.display()), "iso=\n".to_string(), "iso=".to_string(), "skip_hash=1\nlang=en\n".to_string(), String::new(), "\u{7}\u{7}\u{7}".to_string()] {
+            assert_eq!(play_cfg_for_backup(&cfg, &root, false), cfg, "{cfg:?}");
+        }
+    }
+
+    #[test]
+    fn windows_play_cfg_is_never_changed() {
+        let root = std::env::temp_dir().join("racl_bak_src_install");
+        // setup.ps1 writes absolute paths; even a hand-edited relative one is copied as it is
+        for cfg in ["iso=D:\\Games\\rc.iso\r\n", "iso=rom\\x.iso\r\n", "iso=rom/x.iso\n", "a=1\r\n"] {
+            assert_eq!(play_cfg_for_backup(cfg, &root, true), cfg);
+        }
+    }
+
+    #[test]
+    fn a_backup_run_writes_the_absolute_disc_path_on_linux_and_the_same_bytes_on_windows() {
+        let d = scratch("playcfg");
+        fake_install(&d, "0.4.1");
+        let g = game_by_id("rac1").unwrap();
+        let src_cfg: &[u8] = if cfg!(windows) { b"iso=D:\\Games\\rc.iso\r\n" } else { b"iso=rom/x.iso\n" };
+        std::fs::write(d.join("generated/play.cfg"), src_cfg).unwrap();
+        let p = Arc::new(plan(&d, g, "0.4.1").unwrap());
+        wait(&start(p.clone())).unwrap();
+        let got = std::fs::read(p.dest.join("generated/play.cfg")).unwrap();
+        if cfg!(windows) {
+            assert_eq!(got, src_cfg);
+        } else {
+            assert_eq!(String::from_utf8(got).unwrap(), format!("iso={}\n", d.join("rom/x.iso").display()));
+            // the backup finds the disc of the install it was made from, not a missing rom/ below itself
+            assert_eq!(crate::games::installed_iso(&p.dest), Some(d.join("rom/x.iso")));
+        }
+        // the install's own play.cfg is untouched
+        assert_eq!(std::fs::read(d.join("generated/play.cfg")).unwrap(), src_cfg);
+        cleanup(&p.dest);
     }
 }

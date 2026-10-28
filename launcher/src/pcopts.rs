@@ -154,6 +154,16 @@ impl Options {
         }
     }
 
+    /// Drops one line the launcher does not know (no-op when it is not there).
+    pub fn remove_extra(&mut self, key: &str) {
+        self.extra.retain(|(e, _)| e != key);
+    }
+
+    /// The value of a line the launcher does not know (kept untouched on save).
+    pub fn extra(&self, key: &str) -> Option<&str> {
+        self.extra.iter().find(|(e, _)| e == key).map(|(_, v)| v.as_str())
+    }
+
     pub fn extra_keys(&self) -> impl Iterator<Item = &str> {
         self.extra.iter().map(|(k, _)| k.as_str())
     }

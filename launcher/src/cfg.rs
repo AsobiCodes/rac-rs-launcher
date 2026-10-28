@@ -16,11 +16,13 @@ pub struct LauncherCfg {
     pub last_iso_dir: String,
     /// The "Back up your current version first" tick of an update (default on).
     pub backup_before_update: bool,
+    /// Linux "Use my system's Rust and Python" (Settings > Advanced): setup.sh runs with `--system-toolchain`. Written to the file only when on.
+    pub use_system_toolchain: bool,
 }
 
 impl Default for LauncherCfg {
     fn default() -> Self {
-        LauncherCfg { width: 1000.0, height: 640.0, game: "rac1".into(), install: String::new(), tab: "play".into(), minimize_while_playing: false, last_iso_dir: String::new(), backup_before_update: true }
+        LauncherCfg { width: 1000.0, height: 640.0, game: "rac1".into(), install: String::new(), tab: "play".into(), minimize_while_playing: false, last_iso_dir: String::new(), backup_before_update: true, use_system_toolchain: false }
     }
 }
 
@@ -43,6 +45,7 @@ impl LauncherCfg {
                 "minimize_while_playing" => c.minimize_while_playing = matches!(v, "1" | "on" | "true" | "yes"),
                 "last_iso_dir" => c.last_iso_dir = v.to_string(),
                 "backup_before_update" => c.backup_before_update = !matches!(v, "0" | "off" | "false" | "no"),
+                "use_system_toolchain" => c.use_system_toolchain = matches!(v, "1" | "on" | "true" | "yes"),
                 _ => {}
             }
         }
@@ -50,7 +53,7 @@ impl LauncherCfg {
     }
 
     pub fn to_text(&self) -> String {
-        format!(
+        let mut t = format!(
             "width={}\nheight={}\ngame={}\ninstall={}\ntab={}\nminimize_while_playing={}\nlast_iso_dir={}\nbackup_before_update={}\n",
             self.width.round(),
             self.height.round(),
@@ -60,7 +63,12 @@ impl LauncherCfg {
             if self.minimize_while_playing { "on" } else { "off" },
             self.last_iso_dir,
             if self.backup_before_update { "on" } else { "off" }
-        )
+        );
+        // only when on: a Windows launcher.cfg stays byte-identical to the old launcher's
+        if self.use_system_toolchain {
+            t.push_str("use_system_toolchain=on\n");
+        }
+        t
     }
 
     pub fn load(root: &Path) -> LauncherCfg {
@@ -78,7 +86,17 @@ mod tests {
 
     #[test]
     fn round_trip_and_defaults() {
-        let c = LauncherCfg { width: 1111.0, height: 700.0, game: "rac2".into(), install: "rac1-2".into(), tab: "mods".into(), minimize_while_playing: true, last_iso_dir: "D:\\isos".into(), backup_before_update: false };
+        let c = LauncherCfg {
+            width: 1111.0,
+            height: 700.0,
+            game: "rac2".into(),
+            install: "rac1-2".into(),
+            tab: "mods".into(),
+            minimize_while_playing: true,
+            last_iso_dir: "D:\\isos".into(),
+            backup_before_update: false,
+            use_system_toolchain: true,
+        };
         assert_eq!(LauncherCfg::parse(&c.to_text()), c);
         assert_eq!(LauncherCfg::parse(""), LauncherCfg::default());
     }
@@ -90,6 +108,17 @@ mod tests {
         let off = LauncherCfg { backup_before_update: false, ..LauncherCfg::default() };
         assert!(off.to_text().contains("backup_before_update=off"));
         assert!(!LauncherCfg::parse(&off.to_text()).backup_before_update);
+    }
+
+    #[test]
+    fn the_system_toolchain_tick_is_written_only_when_on() {
+        let d = LauncherCfg::default();
+        assert!(!d.use_system_toolchain && !d.to_text().contains("use_system_toolchain"), "a Windows launcher.cfg stays as it was");
+        assert!(!LauncherCfg::parse("width=900\n").use_system_toolchain, "an old launcher.cfg keeps the default");
+        let on = LauncherCfg { use_system_toolchain: true, ..d };
+        assert!(on.to_text().ends_with("use_system_toolchain=on\n"));
+        assert!(LauncherCfg::parse(&on.to_text()).use_system_toolchain);
+        assert!(!LauncherCfg::parse("use_system_toolchain=off\n").use_system_toolchain);
     }
 
     #[test]

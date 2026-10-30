@@ -82,7 +82,8 @@ impl App {
             ui.label(theme::muted(crate::play::SAVES_HINT));
             ui.add_space(4.0);
             if self.lib_ui.confirm_delete.as_deref() == Some(e.id.as_str()) {
-                ui.label(RichText::new("Delete this backup? Its folder goes to the Recycle Bin, with the saves that are in it. Your main install is not touched.").color(theme::TEXT));
+                let msg = format!("Delete this backup? Its folder goes to the {}, with the saves that are in it. Your main install is not touched.", crate::platform::bin_name());
+                ui.label(RichText::new(msg).color(theme::TEXT));
                 ui.horizontal(|ui| {
                     delete = theme::button(ui, "Yes, delete the backup");
                     cancel = theme::button(ui, "Cancel");

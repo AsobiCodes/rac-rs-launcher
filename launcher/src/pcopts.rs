@@ -22,6 +22,11 @@ pub const VEGETATION: [&str; 3] = ["off", "moderate", "lush"];
 /// `intro=play` (the retail logos and movie, the default) or `intro=skip` (straight to the title screen).
 pub const INTRO: [&str; 2] = ["play", "skip"];
 pub const LANGS: [&str; 5] = ["en", "fr", "de", "es", "it"];
+/// The Strafe aiming row's values (`Options::strafe_byte`) and the game's second key for it (a line the launcher keeps as an extra).
+pub const STRAFE_RAISED: u8 = 0;
+pub const STRAFE_SHOULDER: u8 = 1;
+pub const STRAFE_OFF: u8 = 2;
+pub const AIMCAM: &str = "aimcam";
 pub const CAMSPEED_MIN: u32 = 10;
 pub const CAMSPEED_MAX: u32 = 200;
 
@@ -145,13 +150,14 @@ impl Options {
         }
     }
 
-    /// Removes every key the launcher shows; `debug` and unknown keys stay.
+    /// Removes every key the launcher shows (`aimcam` of the Strafe aiming row included); `debug` and unknown keys stay.
     pub fn reset_all(&mut self) {
         let keep = self.known.get("debug").cloned();
         self.known.clear();
         if let Some(d) = keep {
             self.known.insert("debug", d);
         }
+        self.remove_extra(AIMCAM);
     }
 
     /// Drops one line the launcher does not know (no-op when it is not there).
@@ -166,6 +172,48 @@ impl Options {
 
     pub fn extra_keys(&self) -> impl Iterator<Item = &str> {
         self.extra.iter().map(|(k, _)| k.as_str())
+    }
+
+    /// Sets (Some) or removes (None) a line the launcher has no table row for; an existing line keeps its place, a new one goes last
+    /// (the game writes such lines after its own keys, in the order they were set).
+    pub fn set_extra(&mut self, key: &str, value: Option<&str>) {
+        match (self.extra.iter().position(|(e, _)| e == key), value) {
+            (Some(i), Some(v)) => self.extra[i].1 = v.to_string(),
+            (Some(i), None) => {
+                self.extra.remove(i);
+            }
+            (None, Some(v)) => self.extra.push((key.to_string(), v.to_string())),
+            (None, None) => {}
+        }
+    }
+
+    /// The Strafe aiming row (game 0.4.2): 0 Raised, 1 Shoulder, 2 Off. The game's two keys: `strafe=on|off` (as in every version;
+    /// Off = off) plus `aimcam=shoulder` for Shoulder. Nothing set = Raised, the game's default. As the game reads them
+    /// (`pcinput::strafe_row`): strafe off wins, then `aimcam=shoulder` (any case), anything else is Raised.
+    pub fn strafe_byte(&self) -> u8 {
+        if self.get("strafe") == Some("off") {
+            STRAFE_OFF
+        } else if self.extra(AIMCAM).is_some_and(|v| v.trim().eq_ignore_ascii_case("shoulder")) {
+            STRAFE_SHOULDER
+        } else {
+            STRAFE_RAISED
+        }
+    }
+
+    /// As the game's menu does (`pcinput::set_strafe_row`): Raised = strafe on, no `aimcam`; Shoulder = strafe on + `aimcam=shoulder`;
+    /// Off = strafe off and a remembered `aimcam` stays (switching strafe back on gives Shoulder again).
+    pub fn set_strafe_byte(&mut self, b: u8) {
+        match b {
+            STRAFE_SHOULDER => {
+                self.set("strafe", Some("on"));
+                self.set_extra(AIMCAM, Some("shoulder"));
+            }
+            STRAFE_OFF => self.set("strafe", Some("off")),
+            _ => {
+                self.set("strafe", Some("on"));
+                self.set_extra(AIMCAM, None);
+            }
+        }
     }
 
     /// The Camera row: 0 Classic, 1 Static, 2 Smooth (camera=modern + camfeel=smooth is the default = 2).
@@ -263,6 +311,34 @@ mod tests {
         assert_eq!(o.camera_byte(), 0);
         o.set_camera_byte(2);
         assert_eq!(o.to_text(), "version=1\ncamera=modern\n", "smooth = default: no camfeel key");
+    }
+
+    /// The Strafe aiming row (Raised / Shoulder / Off) and the two keys of the game: `strafe=on|off` and `aimcam=shoulder`
+    /// (rac-rs/src/retail/pcinput.rs `strafe_row` / `set_strafe_row`, same table).
+    #[test]
+    fn strafe_row_maps_to_the_games_two_keys() {
+        let row = |t: &str| Options::parse(t).strafe_byte();
+        // reading: nothing set / strafe=on = Raised (the default); aimcam=shoulder = Shoulder; strafe=off wins over aimcam; other aimcam = Raised
+        assert_eq!([row(""), row("strafe=on"), row("strafe=off"), row("aimcam=level"), row("strafe=on\naimcam=shoulder"), row("aimcam=SHOULDER")], [0, 0, 2, 0, 1, 1]);
+        assert_eq!(row("strafe=off\naimcam=shoulder"), STRAFE_OFF);
+        // writing: Shoulder, then Off keeps aimcam (the game does the same), then Raised removes it
+        let mut o = Options::parse("version=1\nlang=de\nfuture=1\n");
+        o.set_strafe_byte(STRAFE_SHOULDER);
+        assert_eq!(o.to_text(), "version=1\nlang=de\nstrafe=on\nfuture=1\naimcam=shoulder\n");
+        assert_eq!(o.strafe_byte(), STRAFE_SHOULDER);
+        o.set_strafe_byte(STRAFE_OFF);
+        assert_eq!(o.to_text(), "version=1\nlang=de\nstrafe=off\nfuture=1\naimcam=shoulder\n");
+        assert_eq!(o.strafe_byte(), STRAFE_OFF);
+        o.set_strafe_byte(STRAFE_RAISED);
+        assert_eq!(o.to_text(), "version=1\nlang=de\nstrafe=on\nfuture=1\n");
+        assert_eq!(o.strafe_byte(), STRAFE_RAISED);
+        // an aimcam line the file already has keeps its place; Reset to defaults takes the row's keys away and keeps unknown lines
+        let mut o = Options::parse("version=1\naimcam=level\nzzz=1\n");
+        o.set_strafe_byte(STRAFE_SHOULDER);
+        assert_eq!(o.to_text(), "version=1\nstrafe=on\naimcam=shoulder\nzzz=1\n");
+        o.reset_all();
+        assert_eq!(o.to_text(), "version=1\nzzz=1\n");
+        assert_eq!(o.strafe_byte(), STRAFE_RAISED);
     }
 
     #[test]

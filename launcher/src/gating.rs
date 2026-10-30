@@ -46,6 +46,8 @@ pub const FIRST_VERSION_VALUE: &[(&str, &str, &str)] = &[
     ("water", "medium", "0.3.0"),
     ("particles", "low", "0.3.0"),
     ("particles", "medium", "0.3.0"),
+    // Strafe aiming: Raised (= strafe on) and Off work everywhere; Shoulder (aimcam=shoulder) came with 0.4.2
+    ("strafe", "shoulder", "0.4.2"),
 ];
 
 /// The first game version that knows `key`; None = every version knows it.
@@ -156,6 +158,10 @@ mod tests {
         assert!(value_needs_text("0.3.0", "water", &levels).is_none());
         assert!(value_needs_text("0.2.2", "ao", &levels).is_none(), "no rows for ao");
         assert!(value_needs_text("0.2.2", "waves", &[("on", "On"), ("off", "Off")]).is_none(), "whole-key gating has its own line");
+        let strafe = [("raised", "Raised"), ("shoulder", "Shoulder"), ("off", "Off")];
+        let t = value_needs_text("0.4.1", "strafe", &strafe).unwrap();
+        assert!(t.starts_with("Shoulder needs game version 0.4.2 or newer (this install is 0.4.1)"), "{t}");
+        assert!(value_needs_text("0.4.2", "strafe", &strafe).is_none() && value_available("0.2.2", "strafe", "off"));
         assert_eq!(join_labels(&["A", "B", "C"]), "A, B and C");
         assert_eq!(join_labels(&["A"]), "A");
     }

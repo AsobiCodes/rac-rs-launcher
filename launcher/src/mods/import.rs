@@ -408,21 +408,64 @@ fn copy_counted(r: &mut impl Read, w: &mut impl Write, st: &ImportState) -> Resu
     }
 }
 
-/// PCSX2's own textures folders: `<Documents>\PCSX2\textures\<SERIAL>\` (or `<SERIAL>.zip`) for the serials we know.
-pub fn pcsx2_candidates(documents: &Path, serials: &[&str]) -> Vec<(String, Source)> {
-    let base = documents.join("PCSX2").join("textures");
+/// The folders PCSX2 keeps `textures\<SERIAL>` in, best first. Windows: `<Documents>\PCSX2\textures`. Linux: `$XDG_CONFIG_HOME/PCSX2/textures`
+/// (`~/.config/PCSX2/textures`), the Flatpak one (`~/.var/app/net.pcsx2.PCSX2/config/PCSX2/textures`), then `<Documents>/PCSX2/textures`.
+/// A parameter for everything the system decides, so the tests choose.
+pub fn pcsx2_texture_bases(windows: bool, documents: &Path, home: Option<&Path>, xdg_config: Option<&Path>) -> Vec<PathBuf> {
+    let docs = documents.join("PCSX2").join("textures");
+    if windows {
+        return vec![docs];
+    }
     let mut v = Vec::new();
-    for s in serials {
-        let d = base.join(s);
-        if d.is_dir() {
-            v.push((s.to_string(), Source::Dir(d)));
-        }
-        let z = base.join(format!("{s}.zip"));
-        if z.is_file() {
-            v.push((s.to_string(), Source::Zip(z)));
+    let config = xdg_config.filter(|p| p.has_root()).map(Path::to_path_buf).or_else(|| home.map(|h| h.join(".config")));
+    if let Some(c) = config {
+        v.push(c.join("PCSX2").join("textures"));
+    }
+    if let Some(h) = home {
+        v.push(h.join(".var").join("app").join("net.pcsx2.PCSX2").join("config").join("PCSX2").join("textures"));
+    }
+    v.push(docs);
+    v
+}
+
+/// PCSX2's texture folders on this PC (`pcsx2_texture_bases` with the real environment).
+pub fn pcsx2_texture_bases_here(documents: &Path) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|s| !s.is_empty()).map(PathBuf::from);
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()).map(PathBuf::from);
+    pcsx2_texture_bases(cfg!(windows), documents, home.as_deref(), xdg.as_deref())
+}
+
+/// PCSX2's own textures folders: `<base>\<SERIAL>\` (or `<SERIAL>.zip`) in each base folder, for the serials we know.
+pub fn pcsx2_candidates_in(bases: &[PathBuf], serials: &[&str]) -> Vec<(String, Source)> {
+    let mut v = Vec::new();
+    for base in bases {
+        for s in serials {
+            let d = base.join(s);
+            if d.is_dir() {
+                v.push((s.to_string(), Source::Dir(d)));
+            }
+            let z = base.join(format!("{s}.zip"));
+            if z.is_file() {
+                v.push((s.to_string(), Source::Zip(z)));
+            }
         }
     }
     v
+}
+
+/// PCSX2's own textures folders: `<Documents>\PCSX2\textures\<SERIAL>\` (or `<SERIAL>.zip`) for the serials we know.
+pub fn pcsx2_candidates(documents: &Path, serials: &[&str]) -> Vec<(String, Source)> {
+    pcsx2_candidates_in(&[documents.join("PCSX2").join("textures")], serials)
+}
+
+/// The text when no PCSX2 texture folder was found. Windows: the one place PCSX2 keeps them (text unchanged since v0.1.x); Linux: every
+/// place that was looked in.
+pub fn pcsx2_not_found(windows: bool, documents: &Path, bases: &[PathBuf], serial: &str) -> String {
+    if windows {
+        return format!("No PCSX2 texture folder was found for your disc. PCSX2 keeps them in:\n{}\\PCSX2\\textures\\{}\\replacements", documents.display(), serial);
+    }
+    let places: Vec<String> = bases.iter().map(|b| format!("{}/{serial}/replacements", b.display())).collect();
+    format!("No PCSX2 texture folder was found for your disc. PCSX2 keeps them in one of:\n{}", places.join("\n"))
 }
 
 #[cfg(test)]
@@ -740,6 +783,53 @@ mod tests {
         std::fs::create_dir_all(d.join("empty")).unwrap();
         std::fs::write(d.join("empty/readme.txt"), b"x").unwrap();
         assert!(inspect(Source::Dir(d.join("empty"))).unwrap_err().contains("does not look like"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Linux: PCSX2's config folder and the Flatpak one are looked in too; Windows is unchanged (Documents only).
+    #[test]
+    fn pcsx2_places_follow_the_platform() {
+        let docs = Path::new("/home/u/Documents");
+        let home = Path::new("/home/u");
+        assert_eq!(pcsx2_texture_bases(true, docs, Some(home), None), vec![docs.join("PCSX2").join("textures")], "Windows: Documents only");
+        let l = pcsx2_texture_bases(false, docs, Some(home), None);
+        assert_eq!(
+            l,
+            vec![
+                home.join(".config/PCSX2/textures"),
+                home.join(".var/app/net.pcsx2.PCSX2/config/PCSX2/textures"),
+                docs.join("PCSX2").join("textures"),
+            ]
+        );
+        let x = pcsx2_texture_bases(false, docs, Some(home), Some(Path::new("/data/cfg")));
+        assert_eq!(x[0], Path::new("/data/cfg/PCSX2/textures"), "XDG_CONFIG_HOME wins over ~/.config");
+        let rel = pcsx2_texture_bases(false, docs, Some(home), Some(Path::new("relative/cfg")));
+        assert_eq!(rel[0], home.join(".config/PCSX2/textures"), "a relative XDG_CONFIG_HOME is ignored (XDG rule)");
+        assert_eq!(pcsx2_texture_bases(false, docs, None, None), vec![docs.join("PCSX2").join("textures")]);
+    }
+
+    #[test]
+    fn pcsx2_folders_are_found_in_every_base() {
+        let d = scratch("pcsx2_bases");
+        let cfg_tex = d.join(".config").join("PCSX2").join("textures");
+        let flat_tex = d.join(".var/app/net.pcsx2.PCSX2/config/PCSX2/textures");
+        make_pack(&cfg_tex, 1);
+        std::fs::create_dir_all(flat_tex.join("SCUS-97199")).unwrap();
+        let bases = pcsx2_texture_bases(false, &d.join("Documents"), Some(&d), None);
+        let v = pcsx2_candidates_in(&bases, &["SCES-50916", "SCUS-97199"]);
+        assert_eq!(v.len(), 2, "{:?}", v.iter().map(|x| x.0.clone()).collect::<Vec<_>>());
+        assert_eq!(v[0].0, "SCES-50916");
+        assert!(matches!(&v[0].1, Source::Dir(p) if p.starts_with(&cfg_tex)));
+        assert_eq!(v[1].0, "SCUS-97199");
+        assert!(matches!(&v[1].1, Source::Dir(p) if p.starts_with(&flat_tex)), "the Flatpak folder");
+        let none = pcsx2_texture_bases(false, &d.join("Nowhere"), Some(&d.join("empty_home")), None);
+        assert!(pcsx2_candidates_in(&none, &["SCES-50916"]).is_empty());
+        let msg = pcsx2_not_found(false, &d, &none, "SCES-50916");
+        // (the test also runs on Windows, where the joined folders print with backslashes)
+        let msg = msg.replace('\\', "/");
+        assert!(msg.contains(".config/PCSX2/textures/SCES-50916/replacements") && msg.contains("net.pcsx2.PCSX2"), "{msg}");
+        let w = pcsx2_not_found(true, Path::new("C:\\Users\\u\\Documents"), &[], "SCES-50916");
+        assert_eq!(w, "No PCSX2 texture folder was found for your disc. PCSX2 keeps them in:\nC:\\Users\\u\\Documents\\PCSX2\\textures\\SCES-50916\\replacements", "Windows text unchanged");
         let _ = std::fs::remove_dir_all(&d);
     }
 

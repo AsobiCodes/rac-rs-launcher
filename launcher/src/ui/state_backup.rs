@@ -193,13 +193,13 @@ impl App {
     pub fn delete_backup(&mut self, id: &str) {
         let Some(e) = self.library.get(id).cloned().filter(|e| e.backup) else { return };
         let g = self.rac1();
-        if (self.cur_id.as_deref() == Some(id) && (self.busy() || self.game_running())) || platform::exe_in_use(&g.exe_path(&e.path())) {
+        if (self.cur_id.as_deref() == Some(id) && (self.busy() || self.game_running())) || crate::mods::loader_update::exe_in_use_settled(&g.exe_path(&e.path())) {
             self.toast("Close the game first, then delete the backup.", true);
             return;
         }
         if e.path().is_dir() {
             if let Err(err) = platform::recycle(&e.path()) {
-                self.toast(format!("The backup could not be moved to the Recycle Bin: {err}"), true);
+                self.toast(format!("The backup could not be moved to the {}: {err}", platform::bin_name()), true);
                 return;
             }
         }
@@ -211,6 +211,6 @@ impl App {
         if self.library.entries.is_empty() {
             self.sel = Sel::Library;
         }
-        self.toast("The backup was moved to the Recycle Bin.", false);
+        self.toast(format!("The backup was moved to the {}.", platform::bin_name()), false);
     }
 }

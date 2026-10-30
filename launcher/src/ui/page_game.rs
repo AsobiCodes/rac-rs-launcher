@@ -273,6 +273,7 @@ impl App {
                 if !repair {
                     ui.add_space(2.0);
                     ui.checkbox(&mut this.shortcut_wanted, if cfg!(windows) { "Create a desktop shortcut" } else { "Add the launcher to the applications menu" });
+                    this.steam_tick(ui);
                 }
                 ui.label(theme::muted(&format!("Needs about {} GB of free disk space and an internet connection (once).", crate::library::NEEDED_GB)));
                 ui.add_space(4.0);

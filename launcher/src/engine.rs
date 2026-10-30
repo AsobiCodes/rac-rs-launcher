@@ -113,6 +113,9 @@ pub struct Engine {
     /// Set once the worker ended and its output is read: the exit code (-1 = killed / unknown).
     pub done: Option<i32>,
     pub cancelled: bool,
+    /// Linux: the sleep inhibitor held while the worker runs (G7, `inhibit_linux.rs`); None elsewhere or when the system has no helper.
+    /// Released the moment the job ends or is cancelled, and by `Drop` with the engine.
+    awake: Option<crate::inhibit_linux::Inhibit>,
 }
 
 fn pump<R: std::io::Read + Send + 'static>(r: R, tx: std::sync::mpsc::Sender<String>) {
@@ -155,7 +158,7 @@ impl Engine {
         if let Some(e) = child.stderr.take() {
             pump(e, tx);
         }
-        Ok(Engine { child, rx, progress: Progress::new(opts.update.is_some()), started: Instant::now(), done: None, cancelled: false })
+        Ok(Engine { child, rx, progress: Progress::new(opts.update.is_some()), started: Instant::now(), done: None, cancelled: false, awake: crate::inhibit_linux::Inhibit::hold() })
     }
 
     /// Reads what the worker printed since the last call and checks whether it ended. Returns true when something changed.
@@ -199,6 +202,7 @@ impl Engine {
             }
             self.progress.update_progress(Instant::now());
             self.done = Some(code);
+            self.awake = None;
             changed = true;
         }
         changed
@@ -213,6 +217,7 @@ impl Engine {
             // the number may belong to an unrelated process group, and a stuck member would block the UI for the grace time twice.
             self.done = Some(self.child.try_wait().ok().flatten().and_then(|s| s.code()).unwrap_or(-1));
         }
+        self.awake = None;
     }
 
     pub fn running(&self) -> bool {

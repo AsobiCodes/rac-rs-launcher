@@ -89,8 +89,9 @@ impl App {
         let names = pr.step_names();
         let pct = pr.progress.floor().min(100.0) as u32;
         let note = match self.run_kind {
-            RunKind::Update { .. } => "This takes about 2 to 10 minutes. You can keep using your PC.",
-            _ => "This takes about 15 minutes. You can keep using your PC.",
+            RunKind::Update { .. } => "This takes about 2 to 10 minutes. You can keep using your PC.".to_string(),
+            _ if cfg!(windows) => "This takes about 15 minutes. You can keep using your PC.".to_string(),
+            _ => crate::linuxenv::install_note_here().to_string(),
         };
         let mut cancel_ask = false;
         let mut cancel_yes = false;

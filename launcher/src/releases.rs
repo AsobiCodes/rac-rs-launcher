@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::stall_guard::StallGuard;
+
 pub const API_BASE: &str = "https://api.github.com/repos";
 pub const GAME_REPO: (&str, &str) = ("AsobiCodes", "rac-rs");
 pub const LAUNCHER_REPO: (&str, &str) = ("AsobiCodes", "rac-rs-launcher");
@@ -73,6 +75,8 @@ pub enum ReleaseError {
     Bad(String),
     NoDigest,
     DigestMismatch,
+    /// The body is bigger than the release says (or than the caller allows).
+    TooLarge,
     DiskFull,
     Io(String),
     Cancelled,
@@ -88,6 +92,7 @@ impl ReleaseError {
             ReleaseError::Bad(m) => format!("The release information could not be read ({m})."),
             ReleaseError::NoDigest => "The download has no checksum, so it was not used. Nothing was changed.".into(),
             ReleaseError::DigestMismatch => "The downloaded file did not match its checksum (damaged or changed), so it was thrown away. Try again.".into(),
+            ReleaseError::TooLarge => "The download is larger than the release says, so it was stopped and not used. Nothing was changed.".into(),
             ReleaseError::DiskFull => "The disk is full. Free some space (or pick another folder) and try again.".into(),
             ReleaseError::Io(m) => format!("A file could not be written: {m}"),
             ReleaseError::Cancelled => "Cancelled.".into(),
@@ -183,7 +188,8 @@ impl ReleaseSource {
             ReleaseSource::GitHub { .. } => {
                 let resp = http_get(&a.browser_download_url, None)?;
                 let len = resp.body().content_length();
-                Ok((Box::new(resp.into_body().into_reader()), len))
+                // a stalled connection ends the download instead of hanging, and Cancel is heard within a quarter of a second
+                Ok((Box::new(StallGuard::new(resp.into_body().into_reader(), STALL_LIMIT)), len))
             }
         }
     }
@@ -223,11 +229,17 @@ pub fn parse_release_list(text: &str) -> Result<Vec<Release>, ReleaseError> {
     Ok(v.into_iter().filter(|r| !r.tag_name.trim().is_empty()).collect())
 }
 
-fn agent() -> ureq::Agent {
+/// Release information (a few KB of JSON) has to arrive within this time in total, body included.
+const API_TIMEOUT: Duration = Duration::from_secs(30);
+/// A download that delivers nothing for this long counts as lost (see `StallGuard`).
+const STALL_LIMIT: Duration = Duration::from_secs(30);
+
+fn agent(global: Option<Duration>) -> ureq::Agent {
     let cfg = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_resolve(Some(Duration::from_secs(10)))
         .timeout_recv_response(Some(Duration::from_secs(20)))
+        .timeout_global(global)
         .http_status_as_error(false)
         .user_agent("rac-rs-launcher");
     #[cfg(windows)]
@@ -236,7 +248,8 @@ fn agent() -> ureq::Agent {
 }
 
 fn http_get(url: &str, accept: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, ReleaseError> {
-    let mut req = agent().get(url);
+    // a request with an Accept header is an API call (small answer, total time limited); without one it is a file download
+    let mut req = agent(accept.map(|_| API_TIMEOUT)).get(url);
     if let Some(a) = accept {
         req = req.header("Accept", a);
     }
@@ -288,9 +301,18 @@ pub fn digest_hex(a: &Asset) -> Option<String> {
 /// Downloads `asset` to `dest`: streams into `dest + ".part"` (progress in `t`, stops on `t.cancel`), checks the SHA-256 against the
 /// release's digest (a missing or wrong digest refuses the file and deletes the part), then renames to `dest`.
 pub fn download(src: &ReleaseSource, asset: &Asset, dest: &Path, t: &Transfer) -> Result<(), ReleaseError> {
+    download_capped(src, asset, dest, t, u64::MAX)
+}
+
+/// `download` for a file with a known upper size: refused before anything is fetched when the release lists more than `max` bytes, and stopped
+/// at once (part deleted) when the body passes `max` or the size the release lists.
+pub fn download_capped(src: &ReleaseSource, asset: &Asset, dest: &Path, t: &Transfer, max: u64) -> Result<(), ReleaseError> {
     let want = digest_hex(asset).ok_or(ReleaseError::NoDigest)?;
+    if asset.size > max {
+        return Err(ReleaseError::TooLarge);
+    }
     let part = PathBuf::from(format!("{}.part", dest.display()));
-    let r = download_part(src, asset, &part, &want, t);
+    let r = download_part(src, asset, &part, &want, t, max);
     match r {
         Ok(()) => {
             let _ = std::fs::remove_file(dest);
@@ -306,7 +328,7 @@ pub fn download(src: &ReleaseSource, asset: &Asset, dest: &Path, t: &Transfer) -
     }
 }
 
-fn download_part(src: &ReleaseSource, asset: &Asset, part: &Path, want: &str, t: &Transfer) -> Result<(), ReleaseError> {
+fn download_part(src: &ReleaseSource, asset: &Asset, part: &Path, want: &str, t: &Transfer, max: u64) -> Result<(), ReleaseError> {
     if let Some(dir) = part.parent() {
         std::fs::create_dir_all(dir).map_err(|e| io_error(&e))?;
     }
@@ -330,6 +352,9 @@ fn download_part(src: &ReleaseSource, asset: &Asset, part: &Path, want: &str, t:
         h.update(&buf[..n]);
         out.write_all(&buf[..n]).map_err(|e| io_error(&e))?;
         done += n as u64;
+        if done > max || (asset.size > 0 && done > asset.size) {
+            return Err(ReleaseError::TooLarge);
+        }
         t.done.store(done, Ordering::Relaxed);
     }
     out.flush().map_err(|e| io_error(&e))?;
@@ -425,6 +450,34 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), data);
         assert_eq!(t.done.load(Ordering::Relaxed), data.len() as u64);
         assert!(!d.join("out").join("tool.exe.part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_capped_download_refuses_a_big_file_and_stops_a_body_bigger_than_listed() {
+        let d = scratch("cap");
+        let data: Vec<u8> = (0..700_000u32).map(|i| (i % 251) as u8).collect();
+        write_test_release(&d, "v1.0.0", "", &[("big.bin", &data)], &good);
+        let src = ReleaseSource::Folder(d.clone());
+        let asset = src.latest().unwrap().asset("big.bin").unwrap().clone();
+        let dest = d.join("o").join("big.bin");
+        let part = d.join("o").join("big.bin.part");
+        // the listed size is over the cap: refused before a byte is fetched (not even the part file is made)
+        assert_eq!(download_capped(&src, &asset, &dest, &Transfer::default(), 1000), Err(ReleaseError::TooLarge));
+        assert!(!part.exists() && !dest.exists());
+        // the release lists 1000 bytes but the file holds 700000: stopped at once, part deleted
+        let small_listing = Asset { size: 1000, ..asset.clone() };
+        let t = Transfer::default();
+        assert_eq!(download_capped(&src, &small_listing, &dest, &t, u64::MAX), Err(ReleaseError::TooLarge));
+        assert!(!part.exists() && !dest.exists());
+        assert!(t.done.load(Ordering::Relaxed) <= 1000, "stopped early, not after the whole body");
+        // a body over the cap while the listing says nothing (size 0)
+        let unlisted = Asset { size: 0, ..asset.clone() };
+        assert_eq!(download_capped(&src, &unlisted, &dest, &Transfer::default(), 5000), Err(ReleaseError::TooLarge));
+        assert!(!part.exists() && !dest.exists());
+        // within the cap it works
+        download_capped(&src, &asset, &dest, &Transfer::default(), 1 << 20).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), data);
         let _ = std::fs::remove_dir_all(&d);
     }
 

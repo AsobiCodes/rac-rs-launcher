@@ -179,6 +179,8 @@ impl App {
             Some("Close the game to update.")
         } else if self.mod_updates.job.is_some() {
             Some("Another mod update is running.")
+        } else if self.loader_upd.job_running() {
+            Some("The mod loader is being changed. Wait a moment.")
         } else if self.busy() {
             Some("Wait until the setup or backup is finished.")
         } else {

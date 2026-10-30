@@ -16,6 +16,8 @@ pub enum Kind {
     Choice(&'static [(&'static str, &'static str)]),
     /// The Camera row: Classic / Static / Smooth, stored as camera= and camfeel=.
     Camera,
+    /// The Strafe aiming row: Raised / Shoulder / Off, stored as `strafe=` plus `aimcam=` (`Options::strafe_byte`).
+    Strafe,
     /// A percent slider, 10..200 in steps of 10: Camera speed (no key = the game's own Slow / Medium / Fast row) and Mouse speed
     /// (no key = the row's `default`, 50).
     Percent,
@@ -179,8 +181,8 @@ pub const ROWS: &[Row] = &[
     Row {
         key: "strafe",
         label: "Strafe aiming",
-        help: "Hold the aim button to move sideways while aiming.",
-        kind: Kind::Choice(ON_OFF),
+        help: "Hold the aim button to move sideways while aiming. Raised lifts the camera over Ratchet (today's look), Shoulder aims over his shoulder, Off turns strafing off.",
+        kind: Kind::Strafe,
         default: "on",
         group: Group::Gameplay,
     },
@@ -223,6 +225,8 @@ pub fn rows_of(group: Group) -> impl Iterator<Item = &'static Row> {
 }
 
 pub const CAMERA_LABELS: [&str; 3] = ["Classic", "Static", "Smooth"];
+/// The Strafe aiming row's choices in order (`Options::strafe_byte`): (name for the gating table, label).
+pub const STRAFE_VALUES: [(&str, &str); 3] = [("raised", "Raised"), ("shoulder", "Shoulder"), ("off", "Off")];
 
 /// Index of the current choice (the value the player set, else the game's default); None = nothing to mark.
 pub fn current_index(o: &Options, row: &Row) -> Option<usize> {
@@ -232,6 +236,7 @@ pub fn current_index(o: &Options, row: &Row) -> Option<usize> {
             list.iter().position(|(val, _)| *val == v)
         }
         Kind::Camera => Some(o.camera_byte() as usize),
+        Kind::Strafe => Some(o.strafe_byte() as usize),
         Kind::Percent => None,
     }
 }
@@ -245,6 +250,7 @@ pub fn choose(o: &mut Options, row: &Row, idx: usize) {
             }
         }
         Kind::Camera => o.set_camera_byte(idx.min(2) as u8),
+        Kind::Strafe => o.set_strafe_byte(idx.min(2) as u8),
         Kind::Percent => {}
     }
 }
@@ -302,6 +308,14 @@ mod tests {
         assert_eq!(o.camera_byte(), 1);
         choose(&mut o, cam, 0);
         assert_eq!(o.camera_byte(), 0);
+        let strafe = ROWS.iter().find(|r| r.key == "strafe").unwrap();
+        assert_eq!(current_index(&o, strafe), Some(0), "default = Raised");
+        choose(&mut o, strafe, 1);
+        assert_eq!((o.get("strafe"), o.extra("aimcam"), current_index(&o, strafe)), (Some("on"), Some("shoulder"), Some(1)));
+        choose(&mut o, strafe, 2);
+        assert_eq!((o.get("strafe"), current_index(&o, strafe)), (Some("off"), Some(2)));
+        choose(&mut o, strafe, 0);
+        assert_eq!((o.get("strafe"), o.extra("aimcam"), current_index(&o, strafe)), (Some("on"), None, Some(0)));
         let lang = ROWS.iter().find(|r| r.key == "lang").unwrap();
         assert_eq!(current_index(&o, lang), None);
         choose(&mut o, lang, 2);

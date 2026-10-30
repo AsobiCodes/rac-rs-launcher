@@ -84,6 +84,44 @@ fn camera_row_writes_the_camera_byte_values() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Strafe aiming (game 0.4.2): Raised / Shoulder / Off write the game's two keys, `strafe=on|off` and `aimcam=shoulder`; an older game
+/// has no Shoulder (greyed, never written); Raised is the default.
+#[test]
+fn strafe_row_writes_the_games_two_keys_and_greys_shoulder_on_older_games() {
+    let root = installed("strafe");
+    std::fs::write(root.join("VERSION"), "0.4.2\n").unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), "0.4.2\n").unwrap();
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(!h.get_by_label("Strafe aiming: Shoulder").accesskit_node().is_disabled());
+    h.get_by_label("Strafe aiming: Shoulder").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|l| l == "strafe=on") && t.lines().any(|l| l == "aimcam=shoulder"), "Shoulder:\n{t}");
+    h.get_by_label("Strafe aiming: Off").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|l| l == "strafe=off"), "Off:\n{t}");
+    h.get_by_label("Strafe aiming: Raised").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|l| l == "strafe=on") && !t.contains("aimcam"), "Raised:\n{t}");
+    let _ = std::fs::remove_dir_all(&root);
+
+    let root = installed("strafe041");
+    std::fs::write(root.join("VERSION"), "0.4.1\n").unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), "0.4.1\n").unwrap();
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(h.get_by_label("Strafe aiming: Shoulder").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Strafe aiming: Raised").accesskit_node().is_disabled() && !h.get_by_label("Strafe aiming: Off").accesskit_node().is_disabled());
+    assert_eq!(h.query_all_by_label_contains("Shoulder needs game version 0.4.2").count(), 1);
+    h.get_by_label("Strafe aiming: Shoulder").click();
+    h.run();
+    assert!(!options_text(&root).contains("aimcam"), "a greyed value is never written");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn pages_pass_the_accessibility_check() {
     let root = installed("a11y");

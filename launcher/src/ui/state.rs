@@ -172,6 +172,8 @@ pub struct App {
     pub disc_path: Option<PathBuf>,
     pub disc_edit_at: Option<Instant>,
     pub shortcut_wanted: bool,
+    /// "Add to Steam" on Linux: the install page's tick and the Settings button (see state_steam.rs).
+    pub steam: crate::ui::state_steam::SteamUi,
     pub picker: Option<(Purpose, Receiver<PickResult>)>,
     // the worker
     pub engine: Option<Engine>,
@@ -198,6 +200,8 @@ pub struct App {
     pub mods_ui: ModsUi,
     /// Update checks and the running update job of the script mods (see `page_mods_update`).
     pub mod_updates: crate::ui::page_mods_update::ModUpdates,
+    /// The mod loader card of the Mods page: its release check and running change (see `page_loader_update`).
+    pub loader_upd: crate::ui::page_loader_update::LoaderUpdates,
     // shell
     pub covers: Covers,
     pub toast: Option<Toast>,
@@ -243,6 +247,7 @@ impl App {
             disc_path: None,
             disc_edit_at: None,
             shortcut_wanted: true,
+            steam: Default::default(),
             picker: None,
             engine: None,
             run_kind: RunKind::Install,
@@ -263,6 +268,7 @@ impl App {
             preset_picked: None,
             mods_ui: ModsUi::default(),
             mod_updates: crate::ui::page_mods_update::ModUpdates::from_env(),
+            loader_upd: crate::ui::page_loader_update::LoaderUpdates::from_env(),
             covers: Covers::default(),
             toast: None,
             confirm_quit: false,
@@ -346,8 +352,9 @@ impl App {
         self.info.disc.map(|d| d.serial)
     }
 
+    /// A setup, a backup or a mod loader change is running (no switching installs, no second change, closing asks first).
     pub fn busy(&self) -> bool {
-        self.engine.as_ref().map(|e| e.running()).unwrap_or(false) || self.backup.job.is_some()
+        self.engine.as_ref().map(|e| e.running()).unwrap_or(false) || self.backup.job.is_some() || self.loader_upd.job_running()
     }
 
     // ------------------------------------------------------------------ the old exe left by a launcher update
@@ -576,6 +583,7 @@ impl App {
     }
 
     pub fn cancel_run(&mut self) {
+        self.loader_upd.cancel_job();
         if self.backup.job.is_some() {
             self.stop_backup();
             return;
@@ -620,6 +628,14 @@ impl App {
         } else if self.run_kind == RunKind::Repair {
             self.done_note = "The game was rebuilt from your disc. Your saves and settings were kept.".to_string();
         }
+        if self.run_kind == RunKind::Install {
+            if let Some(note) = self.steam_after_install() {
+                if !self.done_note.is_empty() {
+                    self.done_note.push(' ');
+                }
+                self.done_note.push_str(&note);
+            }
+        }
         let _ = progress;
         self.view = View::Done;
         self.check_updates();
@@ -650,7 +666,15 @@ impl App {
             if p.is_file() {
                 p
             } else {
-                std::env::current_exe().map_err(|e| e.to_string())?
+                let me = std::env::current_exe().map_err(|e| e.to_string())?;
+                // Linux, the real applications menu: the entry starts a stable copy of the launcher, not the file in Downloads
+                // (only for a launcher whose library is in the data folder: a portable.txt / in-game-folder launcher keeps its library
+                // beside itself, and the copy would open an empty one)
+                let base = platform::data_base();
+                match base.filter(|b| cfg!(not(windows)) && self.shortcut_dir.is_none() && crate::selfinstall::wants_stable_copy(&me, Some(b.as_path()))) {
+                    Some(base) => crate::selfinstall::ensure_stable_copy(&me, &crate::selfinstall::stable_dir(&base)).unwrap_or(me),
+                    None => me,
+                }
             }
         };
         let dir = self.shortcut_dir.clone().or_else(platform::shortcut_dir).ok_or(if cfg!(windows) { "The desktop folder was not found." } else { "The applications folder was not found." })?;
@@ -672,8 +696,16 @@ impl App {
             self.play_error = Some("A mod update is still being installed. Wait a moment, then press Play again.".to_string());
             return;
         }
+        if self.loader_upd.job_running() {
+            self.play_error = Some("The mod loader is being changed. Wait a moment, then press Play again.".to_string());
+            return;
+        }
         let g = self.rac1();
         if let Err(m) = play::check_ready(&self.root, g) {
+            self.play_error = Some(m);
+            return;
+        }
+        if let Some(m) = crate::linuxenv::play_blocker() {
             self.play_error = Some(m);
             return;
         }
@@ -718,7 +750,8 @@ impl App {
                 }
                 self.after_game_exit();
             }
-        } else if self.info.installed && self.last_ext_check.elapsed() > Duration::from_secs(2) {
+        } else if self.info.installed && !crate::mods::loader_update::probing() && self.last_ext_check.elapsed() > Duration::from_secs(2) {
+            // (the launcher's own question to the game exe, `omni-host-abi`, is not a game the player started)
             self.last_ext_check = Instant::now();
             let was = self.game_external;
             self.game_external = platform::exe_in_use(&self.rac1().exe_path(&self.root));
@@ -753,6 +786,7 @@ impl App {
             || self.toast.is_some()
             || self.mods_ui.busy()
             || self.mod_updates.busy()
+            || self.loader_upd.busy()
             || net_busy
             || matches!(self.update_state(), UpdateState::Checking)
             || self.info.installed;

@@ -84,10 +84,14 @@ impl LauncherApp {
         egui::Modal::new(egui::Id::unique("quit")).show(ctx, |ui| {
             ui.set_width(380.0);
             let backing = self.app.backup_running();
-            ui.label(theme::bold(if backing { "A backup is still running" } else { "Setup is still running" }, 20.0));
+            let loader = !backing && !self.app.engine.as_ref().is_some_and(|e| e.running()) && self.app.loader_upd.job_running();
+            let title = if backing { "A backup is still running" } else if loader { "The mod loader is being changed" } else { "Setup is still running" };
+            ui.label(theme::bold(title, 20.0));
             ui.add_space(6.0);
             ui.label(theme::muted(if backing {
                 "If you close the launcher now, the backup is stopped and removed. The update has not started and nothing was changed."
+            } else if loader {
+                "If you close the launcher now, the change is stopped and the mod loader stays as it was."
             } else {
                 "If you close the launcher now, the setup stops. You can start it again later and it continues."
             }));

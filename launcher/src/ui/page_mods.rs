@@ -108,6 +108,7 @@ impl App {
         self.mods_poll_reading();
         self.mods_poll_importing();
         self.mods_update_poll();
+        self.mods_loader_poll();
     }
 
     fn mods_poll_reading(&mut self) {
@@ -174,6 +175,7 @@ impl App {
         }
         self.mods_update_checks();
         self.mods_master_card(ui);
+        self.mods_loader_card(ui);
         ui.add_space(4.0);
         let running = self.read_only();
         ui.add_enabled_ui(!running, |ui| {
@@ -248,13 +250,10 @@ impl App {
             None => self.rac1().discs.iter().map(|d| d.serial).collect(),
         };
         let docs = platform::known_folder(platform::Known::Documents).unwrap_or_default();
-        let found = import::pcsx2_candidates(&docs, &serials);
+        let bases = import::pcsx2_texture_bases_here(&docs);
+        let found = import::pcsx2_candidates_in(&bases, &serials);
         self.mods_ui.add = if found.is_empty() {
-            AddState::Error(format!(
-                "No PCSX2 texture folder was found for your disc. PCSX2 keeps them in:\n{}\\PCSX2\\textures\\{}\\replacements",
-                docs.display(),
-                serials.first().copied().unwrap_or("SERIAL")
-            ))
+            AddState::Error(import::pcsx2_not_found(cfg!(windows), &docs, &bases, serials.first().copied().unwrap_or("SERIAL")))
         } else {
             AddState::Pcsx2(found)
         };
@@ -494,7 +493,7 @@ impl App {
     fn mod_confirm_remove(&mut self, ui: &mut Ui, id: &str, e: &ModEntry) {
         theme::card_colored(ui, theme::RED, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(format!("Remove \"{}\"? It goes to the Recycle Bin.", e.name()));
+            ui.label(format!("Remove \"{}\"? It goes to the {}.", e.name(), crate::platform::bin_name()));
             ui.horizontal(|ui| {
                 if theme::button(ui, "Yes, remove it") {
                     match self.mods_ui.store.remove(id) {

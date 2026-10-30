@@ -76,6 +76,7 @@ impl App {
     fn row_values(row: &Row) -> Vec<(&'static str, &'static str)> {
         match row.kind {
             Kind::Choice(list) => list.to_vec(),
+            Kind::Strafe => rows::STRAFE_VALUES.to_vec(),
             Kind::Camera | Kind::Percent => Vec::new(),
         }
     }
@@ -84,6 +85,7 @@ impl App {
         match row.kind {
             Kind::Choice(list) => list.iter().map(|(_, l)| *l).collect(),
             Kind::Camera => rows::CAMERA_LABELS.to_vec(),
+            Kind::Strafe => rows::STRAFE_VALUES.iter().map(|(_, l)| *l).collect(),
             Kind::Percent => Vec::new(),
         }
     }
@@ -197,6 +199,7 @@ impl App {
                     }
                 }
             });
+            self.steam_card(ui);
             if !self.is_backup() {
                 ui.separator();
                 ui.label(theme::bold("Repair / rebuild", 15.5));

@@ -9,6 +9,8 @@ pub mod active;
 pub mod detect;
 pub mod import;
 pub mod keys;
+pub mod loader;
+pub mod loader_update;
 pub mod script;
 pub mod semver;
 pub mod settings;

@@ -36,7 +36,7 @@ pub fn parse(text: &str) -> Option<Ver> {
         return None;
     }
     let pre = match pre {
-        Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') => Some(s.to_string()),
+        Some(s) if s.split('.').all(|part| !part.is_empty()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') => Some(s.to_string()),
         Some(_) => return None,
         None => None,
     };
@@ -130,6 +130,20 @@ mod tests {
         lt("1.2.0-1", "1.2.0-alpha");
         lt("1.2.0-alpha", "1.2.0-beta");
         assert_eq!(cmp_text("v0.3.3", "0.3.3"), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn empty_pre_release_parts_and_other_non_versions_are_refused() {
+        for bad in ["1.0.0-rc..1", "1.0.0-.rc", "1.0.0-rc.", "1.0.0-", "1.0.0-.", "1.0", "1.2.3.4", "01.2.3", "1.2.3-", "latest", "", "v", "1.0.0-rc 1", "1.0.0-r_c"] {
+            assert!(parse(bad).is_none(), "{bad:?} was taken for a version");
+        }
+        for good in ["1.0.0", "v1.0.0", "V1.0.0", "1.0.0-rc.1", "0.2.0-rc.10", "1.0.0-rc-1", "1.0.0-0.3.7"] {
+            assert!(parse(good).is_some(), "{good:?} was refused");
+        }
+        assert!(is_newer("0.2.0-rc.10", "0.2.0-rc.2") && !is_newer("0.2.0-rc.2", "0.2.0-rc.10"));
+        assert!(is_newer("0.2.0", "0.2.0-rc.10") && !is_newer("0.2.0-rc.1", "0.2.0"));
+        // a version with an empty pre-release part is no version: never newer, never older
+        assert!(!is_newer("1.0.0-rc..1", "0.1.0") && !is_newer("2.0.0", "1.0.0-rc..1"));
     }
 
     #[test]

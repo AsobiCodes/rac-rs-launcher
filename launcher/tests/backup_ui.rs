@@ -320,6 +320,9 @@ fn a_backup_shows_its_chip_and_delete_needs_a_second_click() {
     assert_eq!(h.state().app.lib_ui.confirm_delete.as_deref(), Some(bid.as_str()));
     assert!(bdir.is_dir(), "one click deletes nothing");
     assert!(h.query_by_label("Yes, delete the backup").is_some());
+    // the confirm names the right place: Recycle Bin on Windows, Trash on Linux
+    let bin = rac_rs_launcher::platform::bin_name();
+    assert!(h.query_all_by_label_contains(&format!("goes to the {bin}")).count() >= 1, "the confirm says {bin}");
     // Cancel backs out
     h.get_by_label("Cancel").click();
     h.run_steps(3);
@@ -331,6 +334,7 @@ fn a_backup_shows_its_chip_and_delete_needs_a_second_click() {
     h.run_steps(3);
     let app = &h.state().app;
     assert!(!bdir.exists(), "the folder is gone (the Recycle Bin path minus the bin)");
+    assert!(app.toast.as_ref().is_some_and(|t| t.text.contains(&format!("moved to the {bin}"))), "the toast says {bin}");
     assert_eq!(app.library.entries.len(), 1);
     assert!(app.library.get(&bid).is_none());
     assert_eq!(Library::load(&data).entries.len(), 1, "saved");

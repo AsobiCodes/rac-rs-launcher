@@ -3,7 +3,11 @@
 # On a real Linux PC just run `cargo build --release` in launcher\ (gcc/cc); this script is only for building from Windows.
 #   & .\build_linux.ps1            release binary
 #   & .\build_linux.ps1 -Tests      release binary + lib test binary
-param([switch]$Tests, [string]$Glibc = '2.28')
+#   & .\build_linux.ps1 -Package    release binary + the two release files in dist_linux: rac-rs-launcher-linux-x64 (the bare program: v0.1.2
+#                                   launchers update themselves from exactly this asset name, so it stays a release asset) and
+#                                   rac-rs-launcher-linux-x64.tar.gz (the download for people: a folder with the launcher (run bit kept),
+#                                   README-first-steps.txt and the icon), each with a .sha256 file.
+param([switch]$Tests, [switch]$Package, [string]$Glibc = '2.28')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tools = Join-Path $here 'linux_tools'
@@ -33,6 +37,18 @@ try {
     & cargo build --release --target $target --target-dir $tdir
     if ($LASTEXITCODE -ne 0) { Write-Host 'LINUX BUILD FAILED'; exit $LASTEXITCODE }
     Copy-Item -LiteralPath (Join-Path $tdir "$target\release\rac-rs-launcher") -Destination (Join-Path $dist 'rac-rs-launcher') -Force
+    if ($Package) {
+        $raw = Join-Path $dist 'rac-rs-launcher-linux-x64'
+        $tgz = Join-Path $dist 'rac-rs-launcher-linux-x64.tar.gz'
+        Copy-Item -LiteralPath (Join-Path $dist 'rac-rs-launcher') -Destination $raw -Force
+        & python -I (Join-Path $tools 'pack_tar.py') $raw (Join-Path $tools 'README-first-steps.txt') (Join-Path $here 'launcher\assets\rac-rs-256.png') $tgz
+        if ($LASTEXITCODE -ne 0) { Write-Host 'PACKAGE FAILED'; exit $LASTEXITCODE }
+        foreach ($f in @($raw, $tgz)) {
+            $h = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLower()
+            Set-Content -LiteralPath "$f.sha256" -Encoding ascii -Value "$h  $(Split-Path -Leaf $f)"
+            Write-Host "$(Split-Path -Leaf $f)  $h"
+        }
+    }
     if ($Tests) {
         $out = & cargo test --lib --no-run --target $target --target-dir $tdir --message-format=json 2>$null
         if ($LASTEXITCODE -ne 0) { Write-Host 'LINUX TEST BUILD FAILED'; exit $LASTEXITCODE }

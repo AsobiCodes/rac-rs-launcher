@@ -10,3 +10,5 @@ linux_tools/*
 *.log
 *.part
 *.old
+dist_linux/
+target_test/

@@ -35,10 +35,21 @@ pub fn start(root: &Path, game: &GameDef) -> Result<Child, String> {
     let player = root.join("player");
     let _ = std::fs::create_dir_all(&player);
     safety_copies(&player);
+    let mut cmd = game_command(root, game);
+    cmd.spawn().map_err(|e| format!("The game could not be started.\n\n{e}"))
+}
+
+/// The game's command line and environment. Linux: `RAC_RUN_LOG=1` makes the game write `player/log.txt` (it does so by itself only when its
+/// stderr goes nowhere, and the launcher's stderr may be a terminal or a file), so "Open log folder" always has the log; a value the player
+/// set in the environment is kept.
+fn game_command(root: &Path, game: &GameDef) -> Command {
     let mut cmd = Command::new(game.exe_path(root));
     cmd.current_dir(root).env("RAC_NO_UPDATE_CHECK", "1");
+    if cfg!(not(windows)) && std::env::var_os("RAC_RUN_LOG").is_none() {
+        cmd.env("RAC_RUN_LOG", "1");
+    }
     platform::hidden(&mut cmd);
-    cmd.spawn().map_err(|e| format!("The game could not be started.\n\n{e}"))
+    cmd
 }
 
 /// Where an install keeps its saves: the folder Play.cmd gives the game as RAC_PLAYER_DIR. Every release from 0.2.1 to 0.3.1 has
@@ -121,6 +132,19 @@ mod tests {
         assert_eq!(std::fs::read(d.join("card.start1.bin")).unwrap(), b"B");
         assert_eq!(std::fs::read(d.join("card.start2.bin")).unwrap(), b"A");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_game_gets_the_run_log_switch_on_linux_only() {
+        let g = game_by_id("rac1").unwrap();
+        let cmd = game_command(Path::new("X:/none"), g);
+        let env = |k: &str| cmd.get_envs().find(|(n, _)| *n == k).map(|(_, v)| v.map(|v| v.to_string_lossy().to_string()));
+        assert_eq!(env("RAC_NO_UPDATE_CHECK"), Some(Some("1".to_string())));
+        if cfg!(windows) {
+            assert_eq!(env("RAC_RUN_LOG"), None, "Windows: unchanged");
+        } else if std::env::var_os("RAC_RUN_LOG").is_none() {
+            assert_eq!(env("RAC_RUN_LOG"), Some(Some("1".to_string())));
+        }
     }
 
     #[test]

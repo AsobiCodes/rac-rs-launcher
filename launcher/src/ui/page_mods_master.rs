@@ -3,7 +3,7 @@
 use super::state::App;
 use super::theme;
 use crate::gating;
-use crate::mods::Master;
+use crate::mods::{loader, Master};
 use egui::{RichText, Ui};
 
 /// What one tick shows.
@@ -33,6 +33,12 @@ fn status_text(m: Master, on: bool, installed: usize, switched_on: usize) -> Str
 }
 
 impl App {
+    /// The game exe is there but `omniloader.dll` / `libomniloader.so` next to it is not (setup puts it there from `bundled/`).
+    fn loader_missing(&self) -> bool {
+        let exe = self.rac1().exe_path(&self.root);
+        exe.is_file() && !loader::info(&exe).present
+    }
+
     fn master_rows(&self) -> Vec<MasterRow> {
         let store = &self.mods_ui.store;
         let running = self.read_only();
@@ -45,8 +51,11 @@ impl App {
                 let feature = if m == Master::Textures { gating::TEXTURE_PACKS } else { gating::SCRIPT_MODS };
                 let locked = gating::needs_text(&self.info.local_version, feature);
                 let empty = installed == 0;
+                // script mods installed and switched on, the game is installed, but its mod loader library is not next to the exe
+                let no_loader = m == Master::Mods && installed > 0 && on && self.loader_missing();
                 match locked {
                     Some(t) => MasterRow { master: m, on, enabled: false, text: t, reason: true },
+                    None if no_loader => MasterRow { master: m, on, enabled: !running, text: loader::missing_text(cfg!(windows)), reason: true },
                     None => MasterRow { master: m, on, enabled: !running && !(empty && on), text: status_text(m, on, installed, switched_on), reason: false },
                 }
             })

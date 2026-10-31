@@ -1,7 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 use rac_rs_launcher::cfg::LauncherCfg;
 use rac_rs_launcher::platform;
-use rac_rs_launcher::ui::{theme, LauncherApp};
+use rac_rs_launcher::ui::{scale, theme, LauncherApp};
 use std::time::{Duration, Instant};
 
 const ICON_PNG: &[u8] = include_bytes!("../assets/rac-rs-256.png");
@@ -37,8 +37,9 @@ fn main() {
     let cfg = LauncherCfg::load(&info.data_dir);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("RAC-RS Launcher")
-        .with_inner_size([cfg.width.max(860.0), cfg.height.max(580.0)])
-        .with_min_inner_size([860.0, 580.0]);
+        .with_inner_size(scale::start_size(cfg.width, cfg.height))
+        // the real minimum (860 x 580 points, but never more than the monitor) is set after the first frame: `ui::scale::Fit`
+        .with_min_inner_size(scale::BOOT_MIN);
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }

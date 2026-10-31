@@ -15,6 +15,7 @@ pub mod page_settings;
 pub mod presets;
 pub mod profile_picker;
 pub mod rows;
+pub mod scale;
 pub mod settings_presets;
 pub mod sidebar;
 pub mod state;

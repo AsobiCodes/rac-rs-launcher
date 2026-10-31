@@ -5,6 +5,9 @@ use crate::games::GameDef;
 use crate::update::UpdateState;
 use egui::{RichText, ScrollArea, Ui, Vec2};
 
+/// Windows lower than this (points) show Play above the update banner; the smallest window is 580 points high, a default one 640.
+const SHORT_PAGE_H: f32 = 600.0;
+
 impl App {
     pub fn show_game_page(&mut self, ui: &mut Ui) {
         let g = self.rac1();
@@ -72,21 +75,14 @@ impl App {
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             self.hero(ui, g, |this, ui| {
                 this.play_status_chips(ui);
-                this.update_banner(ui);
-                let running = this.game_running();
-                let label = if running { "Playing..." } else { "Play" };
-                ui.horizontal(|ui| {
-                    if !this.profile_id.is_empty() {
-                        this.profile_picker(ui, true, 200.0);
-                    }
-                    let w = ui.available_width();
-                    if theme::primary_button(ui, label, Vec2::new(w, 72.0), !running) {
-                        let ctx = ui.ctx().clone();
-                        this.play(&ctx);
-                    }
-                });
-                if running {
-                    ui.label(RichText::new("The game is running. Close its window to play again from here.").color(theme::GREEN).size(13.5));
+                // a short window (Steam Deck, the smallest window): Play stays right under the chips, the update banner goes below it
+                let short = ui.ctx().content_rect().height() < SHORT_PAGE_H;
+                if short {
+                    this.play_row(ui);
+                    this.update_banner(ui);
+                } else {
+                    this.update_banner(ui);
+                    this.play_row(ui);
                 }
                 if let Some(m) = this.play_error.clone() {
                     theme::card_colored(ui, theme::RED, |ui| {
@@ -100,6 +96,25 @@ impl App {
                 this.saves_row(ui);
             });
         });
+    }
+
+    /// The profile picker and the big Play button (and the "game is running" line).
+    fn play_row(&mut self, ui: &mut Ui) {
+        let running = self.game_running();
+        let label = if running { "Playing..." } else { "Play" };
+        ui.horizontal(|ui| {
+            if !self.profile_id.is_empty() {
+                self.profile_picker(ui, true, 200.0);
+            }
+            let w = ui.available_width();
+            if theme::primary_button(ui, label, Vec2::new(w, 72.0), !running) {
+                let ctx = ui.ctx().clone();
+                self.play(&ctx);
+            }
+        });
+        if running {
+            ui.label(RichText::new("The game is running. Close its window to play again from here.").color(theme::GREEN).size(13.5));
+        }
     }
 
     fn play_status_chips(&mut self, ui: &mut Ui) {
@@ -223,7 +238,8 @@ impl App {
             ui.horizontal(|ui| {
                 theme::chip(ui, if offer.finish { "Finish update" } else { "Update" }, theme::ORANGE);
                 let title = if offer.finish { format!("Finish the update to v{}", offer.to) } else { format!("Version {} is available (you have {})", offer.to, offer.from) };
-                ui.label(theme::bold(title, 16.0));
+                // wraps in a narrow window (860 points: the title ran past the page edge and pushed the Play button out of the window)
+                ui.add(egui::Label::new(theme::bold(title, 16.0)).wrap());
             });
             ui.label(theme::muted(if offer.finish {
                 "An earlier update was not finished. It takes about 2 to 10 minutes. Your saves and settings are kept."

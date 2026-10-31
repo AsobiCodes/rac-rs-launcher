@@ -104,6 +104,8 @@ pub fn apply(ctx: &egui::Context) {
 /// The big orange button. Returns the click.
 pub fn primary_button(ui: &mut Ui, text: &str, size: Vec2, enabled: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
+    // a screen reader (and the UI tests) find the big button by its text
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
     let fill = if !enabled {
         Color32::from_rgb(0x3A, 0x30, 0x27)
     } else if resp.is_pointer_button_down_on() {

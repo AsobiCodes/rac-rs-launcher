@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.1.4
+- Steam Deck (Gaming Mode) and small screens: the launcher now fits a 1280x800 screen at any scale factor; before, the page was cut off and the Play button was out of view (issue #1). In a small window Play stays visible above the update notice, and the update notice no longer runs past the edge of a narrow window. Desktop windows look the same as before. Not yet tried on a real Steam Deck.
+
 ## v0.1.3
 - Linux: the download is now `rac-rs-launcher-linux-x64.tar.gz` (a folder with the launcher, a first-steps text and the icon). It keeps the run permission, so after extracting, a double-click starts the launcher; no `chmod` and no "Allow executing as program". The bare `rac-rs-launcher-linux-x64` stays on the release page for the self-update of v0.1.2.
 - Linux: the applications-menu entry now starts a copy of the launcher in `~/.local/share/rac-rs-launcher` instead of the file in Downloads, so deleting or moving the download no longer breaks it. A newer launcher is never replaced by an older download; the download itself is never deleted.

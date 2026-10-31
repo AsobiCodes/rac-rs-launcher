@@ -6,12 +6,14 @@ use std::time::Duration;
 
 pub struct LauncherApp {
     pub app: App,
+    /// Window size in points of the system scale (what `with_inner_size` takes at the next start), not of the fitted zoom.
     size: Vec2,
+    fit: super::scale::Fit,
 }
 
 impl LauncherApp {
     pub fn new(app: App) -> LauncherApp {
-        LauncherApp { size: Vec2::new(app.cfg.width, app.cfg.height), app }
+        LauncherApp { size: Vec2::new(app.cfg.width, app.cfg.height), app, fit: Default::default() }
     }
 
     /// Draws the whole window into `ui` (the root ui of the frame). Also used by the snapshot tests.
@@ -168,9 +170,11 @@ impl eframe::App for LauncherApp {
                 self.app.confirm_quit = true;
             }
         }
+        // small screens (Steam Deck in Gaming Mode): lower the zoom until the pages fit, limit the minimum window to the monitor
+        self.fit.apply(&ctx);
         if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
             if r.width() > 100.0 && r.height() > 100.0 {
-                self.size = r.size();
+                self.size = r.size() * ctx.zoom_factor();
             }
         }
         let active = self.app.tick(&ctx);

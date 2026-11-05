@@ -38,7 +38,8 @@ fn harness(root: &PathBuf, tab: Tab, steam: SteamUi) -> Harness<'static, Launche
     app.sel = Sel::Game("rac1");
     app.tab = tab;
     app.steam = steam;
-    Harness::builder().with_size(vec2(1100.0, 3600.0)).with_context_setup(|ctx| theme::apply(ctx)).build_ui_state(|ui, la: &mut LauncherApp| la.draw(ui), LauncherApp::new(app))
+    // tall enough for the whole Settings page: the Steam card sits at its end (the v0.5 page has every in-game row)
+    Harness::builder().with_size(vec2(1100.0, 8000.0)).with_context_setup(|ctx| theme::apply(ctx)).build_ui_state(|ui, la: &mut LauncherApp| la.draw(ui), LauncherApp::new(app))
 }
 
 fn toast(h: &Harness<'static, LauncherApp>) -> (String, bool) {

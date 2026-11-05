@@ -1,6 +1,8 @@
 //! The egui user interface of the launcher.
 pub mod app;
 pub mod cover;
+pub mod ach_icons;
+pub mod page_achievements;
 pub mod page_backup;
 pub mod page_game;
 pub mod page_install;

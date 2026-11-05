@@ -39,7 +39,7 @@ fn harness(root: &PathBuf, tab: Tab) -> Harness<'static, LauncherApp> {
     app.sel = Sel::Game("rac1");
     app.tab = tab;
     Harness::builder()
-        .with_size(vec2(1100.0, 3600.0))
+        .with_size(vec2(1100.0, 8000.0)) // the whole Settings page must fit: a click below the window does nothing (v0.5 has every in-game row)
         .with_context_setup(|ctx| theme::apply(ctx))
         .build_ui_state(|ui, la: &mut LauncherApp| la.draw(ui), LauncherApp::new(app))
 }
@@ -115,10 +115,52 @@ fn strafe_row_writes_the_games_two_keys_and_greys_shoulder_on_older_games() {
     h.run();
     assert!(h.get_by_label("Strafe aiming: Shoulder").accesskit_node().is_disabled());
     assert!(!h.get_by_label("Strafe aiming: Raised").accesskit_node().is_disabled() && !h.get_by_label("Strafe aiming: Off").accesskit_node().is_disabled());
-    assert_eq!(h.query_all_by_label_contains("Shoulder needs game version 0.4.2").count(), 1);
+    assert!(h.get_by_label("Strafe aiming: Steady").accesskit_node().is_disabled());
+    assert_eq!(h.query_all_by_label_contains("Shoulder and Steady need game version 0.5.0").count(), 1);
     h.get_by_label("Strafe aiming: Shoulder").click();
     h.run();
     assert!(!options_text(&root).contains("aimcam"), "a greyed value is never written");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The rows of the 0.5.0 menu write the game's lines (own keys and extra lines); a 0.4.3 game greys them, while its 0.4.1 / 0.4.2 rows work.
+#[test]
+fn the_v05_rows_write_the_games_lines_and_older_games_grey_them() {
+    let root = installed("v05rows");
+    std::fs::write(root.join("VERSION"), "0.5.0\n").unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), "0.5.0\n").unwrap();
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    for label in ["Aspect ratio: 21:9", "Upscaler: DLSS", "Upscale quality: Performance (50%)", "Culling: Off", "Strafe aiming: Steady", "Button glyphs: Letters", "Wrench throw: Moving", "HUD position: Corners", "FPS limit: 120"] {
+        h.get_by_label(label).click();
+        h.run();
+    }
+    let t = options_text(&root);
+    for line in ["aspect=21:9", "upscaler=dlss", "upscale_q=performance", "culling=off", "culling_off=kept", "strafe=on", "aimcam=steady", "glyphs=letters", "wrenchthrow=moving", "hudpos=corners", "fps=120"] {
+        assert!(t.lines().any(|l| l == line), "{line} missing:\n{t}");
+    }
+    assert_eq!(h.query_all_by_label_contains("Applies while the Upscaler is Off").count(), 1, "Render scale says why it is dimmed");
+    h.get_by_label("Culling: On").click();
+    h.run();
+    assert!(!options_text(&root).contains("culling"), "On removes both lines");
+    let _ = std::fs::remove_dir_all(&root);
+
+    let root = installed("v043rows");
+    std::fs::write(root.join("VERSION"), "0.4.3\n").unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), "0.4.3\n").unwrap();
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    for label in ["Upscaler: DLSS", "Aspect ratio: 21:9", "Wrench throw: Moving", "Menu style: Classic", "Strafe aiming: Steady"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+    for label in ["HUD position: Corners", "Button glyphs: Letters", "Start skips cutscenes: Off", "Culling: Off"] {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+    h.get_by_label("Upscaler: DLSS").click();
+    h.get_by_label("Button glyphs: Letters").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(!t.contains("upscaler") && t.lines().any(|l| l == "glyphs=letters"), "{t}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -234,5 +276,72 @@ fn support_link_is_in_the_sidebar() {
     h.run();
     assert_eq!(h.query_all_by_label("Support the project").count(), 1);
     assert_eq!(rac_rs_launcher::play::SUPPORT_URL, "https://ko-fi.com/asobicodes");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn installed_at(name: &str, version: &str, options: &str) -> PathBuf {
+    let root = installed(name);
+    std::fs::write(root.join("VERSION"), format!("{version}\n")).unwrap();
+    std::fs::write(root.join("generated/built_version.txt"), format!("{version}\n")).unwrap();
+    std::fs::write(root.join("player/pc_options.txt"), options).unwrap();
+    root
+}
+
+/// A change to a picture row writes the Fur / Fire / Smoke values the page showed before the change, so they do not shift (the game writes the
+/// three keys when it saves). A game that does not know the keys (0.4.3) and a row that is not a picture row get none.
+#[test]
+fn changing_a_picture_row_pins_what_fur_fire_and_smoke_show() {
+    let root = installed_at("pin", "0.5.0", "version=1\n");
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    h.get_by_label("Language: English").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(!t.contains("fur=") && !t.contains("fire=") && !t.contains("smoke="), "a language change is not a picture change:\n{t}");
+    h.get_by_label("Ambient occlusion: Off").click();
+    h.run();
+    let t = options_text(&root);
+    for l in ["ao=off", "fur=high", "fire=high", "smoke=high"] {
+        assert!(t.lines().any(|x| x == l), "{l} missing after the click:\n{t}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+
+    // a v0.4 Low file: Low stays shown as Fur / Fire / Smoke Off after one row is changed
+    let low = "version=1\ndraw=low\nsmoothing=off\nhud=original\nao=low\nshadows=low\nwater=low\nparticles=low\nsunrays=low\nvegetation=off\nwaves=off\nfog=classic\nclouds=classic\n";
+    let root = installed_at("pin_low", "0.5.0", low);
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(h.get_by_label("Graphics quality: Custom").accesskit_node().is_disabled(), "the file is the Low preset");
+    h.get_by_label("Ambient occlusion: High").click();
+    h.run();
+    let t = options_text(&root);
+    for l in ["ao=high", "fur=off", "fire=off", "smoke=off"] {
+        assert!(t.lines().any(|x| x == l), "{l} missing after the click:\n{t}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+
+    let root = installed_at("pin_old", "0.4.3", "version=1\n");
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    h.get_by_label("Ambient occlusion: Off").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(t.lines().any(|x| x == "ao=off") && !t.contains("fur=") && !t.contains("fire=") && !t.contains("smoke="), "0.4.3 ignores the keys:\n{t}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Culling Off (with the game's marker line) makes the selector Custom as in the game; a preset click switches Culling back On.
+#[test]
+fn culling_off_shows_custom_and_a_preset_click_switches_it_on() {
+    let root = installed_at("cull", "0.5.0", "version=1\nculling=off\nculling_off=kept\nlang=de\n");
+    let mut h = harness(&root, Tab::Settings);
+    h.run();
+    assert!(!h.get_by_label("Graphics quality: Custom").accesskit_node().is_disabled(), "Culling Off matches no preset");
+    h.get_by_label("Graphics quality: High").click();
+    h.run();
+    let t = options_text(&root);
+    assert!(!t.contains("culling"), "the preset drops culling=off and the marker:\n{t}");
+    assert!(t.lines().any(|x| x == "lang=de"), "other lines kept:\n{t}");
+    assert!(h.get_by_label("Graphics quality: Custom").accesskit_node().is_disabled(), "High matches again");
     let _ = std::fs::remove_dir_all(&root);
 }

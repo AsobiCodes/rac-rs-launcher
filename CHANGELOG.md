@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5
+- New: an Achievements tab next to Play, Settings and Mods. It reads the game's achievements file and shows the totals, a filter (all, unlocked, locked), and every achievement with its trophy icon, the date it was unlocked and a progress bar for the ones that count something. Until the game has written the file, the tab says so.
+- Settings: new rows for the picture options that came with game version 0.5.0: Fur (Ratchet's fur shader), Fur style (Soft or Fluffy), Metal (shiny metal reflections), Fire (realistic flames and burning buildings) and Smoke (volumetric smoke). They only show for a game that is version 0.5.0 or newer; older games do not get them, and nothing is written to their settings file.
+- Settings: every option of the game's own Options menu that lives in its settings file is now on the Settings page too. New rows: Aspect ratio, Render scale, Upscaler (Off, FSR or DLSS), Upscale quality, FPS limit, HUD position and HUD scale (in a new "Screen and HUD" group); Underwater look, Metal reflections, Culling and Supporter drawings; Lock-on strength; Wrench throw, Quick Select pauses the game, Auto-equip gadgets, Start skips cutscenes and Menu style; and a new Controls group with Stick dead zone, Quick Select with the mouse and Button glyphs. Strafe aiming gets the fourth choice Steady. Each row writes the same line the game's menu writes, and rows that another row switches off (Upscale quality while the Upscaler is Off, Metal reflections while Metal is Off) are dimmed with a note. Every row is greyed for a game too old to know it (0.4.1, 0.4.2 or 0.5.0). Key and button binding stays in the game's Options > Controls (the launcher keeps those lines as they are), and camera reversing too (the game keeps it in its save, not in the settings file).
+- Presets: the graphics presets (Low, Medium, High) now set Fur, Fire and Smoke the way the game does. A preset leaves your Fur style alone. Changing one picture row by hand no longer switches Fur, Fire or Smoke off by accident.
+- Everything from v0.1.4 stays: Linux and Steam Deck fit, the Mod loader card and the Strafe aiming row (now with four choices).
+
 ## v0.1.4
 - Steam Deck (Gaming Mode) and small screens: the launcher now fits a 1280x800 screen at any scale factor; before, the page was cut off and the Play button was out of view (issue #1). In a small window Play stays visible above the update notice, and the update notice no longer runs past the edge of a narrow window. Desktop windows look the same as before. Not yet tried on a real Steam Deck.
 

@@ -9,7 +9,7 @@ pub struct LauncherCfg {
     pub game: String,
     /// Library id of the install that was open last.
     pub install: String,
-    /// Last tab of the game page: play, settings, mods.
+    /// Last tab of the game page: play, settings, mods, achievements.
     pub tab: String,
     pub minimize_while_playing: bool,
     /// Where the disc picker started last time.
@@ -41,7 +41,7 @@ impl LauncherCfg {
                 "height" => c.height = v.parse().ok().filter(|h: &f32| (400.0..=6000.0).contains(h)).unwrap_or(c.height),
                 "game" if !v.is_empty() => c.game = v.to_string(),
                 "install" => c.install = v.to_string(),
-                "tab" if matches!(v, "play" | "settings" | "mods") => c.tab = v.to_string(),
+                "tab" if matches!(v, "play" | "settings" | "mods" | "achievements") => c.tab = v.to_string(),
                 "minimize_while_playing" => c.minimize_while_playing = matches!(v, "1" | "on" | "true" | "yes"),
                 "last_iso_dir" => c.last_iso_dir = v.to_string(),
                 "backup_before_update" => c.backup_before_update = !matches!(v, "0" | "off" | "false" | "no"),

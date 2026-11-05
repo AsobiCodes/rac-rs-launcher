@@ -30,6 +30,7 @@ pub enum Tab {
     Play,
     Settings,
     Mods,
+    Achievements,
 }
 
 impl Tab {
@@ -38,12 +39,14 @@ impl Tab {
             Tab::Play => "play",
             Tab::Settings => "settings",
             Tab::Mods => "mods",
+            Tab::Achievements => "achievements",
         }
     }
     pub fn from_id(s: &str) -> Tab {
         match s {
             "settings" => Tab::Settings,
             "mods" => Tab::Mods,
+            "achievements" => Tab::Achievements,
             _ => Tab::Play,
         }
     }
@@ -202,6 +205,9 @@ pub struct App {
     pub mod_updates: crate::ui::page_mods_update::ModUpdates,
     /// The mod loader card of the Mods page: its release check and running change (see `page_loader_update`).
     pub loader_upd: crate::ui::page_loader_update::LoaderUpdates,
+    /// The Achievements tab: the watched achievements.json and the list filter.
+    pub ach: crate::achievements::Watch,
+    pub ach_filter: crate::achievements::Filter,
     // shell
     pub covers: Covers,
     pub toast: Option<Toast>,
@@ -269,6 +275,8 @@ impl App {
             mods_ui: ModsUi::default(),
             mod_updates: crate::ui::page_mods_update::ModUpdates::from_env(),
             loader_upd: crate::ui::page_loader_update::LoaderUpdates::from_env(),
+            ach: Default::default(),
+            ach_filter: Default::default(),
             covers: Covers::default(),
             toast: None,
             confirm_quit: false,
@@ -841,7 +849,7 @@ mod tests {
 
     #[test]
     fn tab_ids_round_trip() {
-        for t in [Tab::Play, Tab::Settings, Tab::Mods] {
+        for t in [Tab::Play, Tab::Settings, Tab::Mods, Tab::Achievements] {
             assert_eq!(Tab::from_id(t.id()), t);
         }
     }

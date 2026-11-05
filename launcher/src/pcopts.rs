@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 /// Keys in the order the game writes them (the launcher's `renderer` after `display`).
 pub const KEYS: &[&str] = &[
-    "lang", "camera", "camfeel", "strafe", "buyall", "lockon", "camspeed", "mousespeed", "lighting", "ao", "shadows", "display", "renderer", "water", "particles", "sunrays",
-    "smoothing", "vegetation", "culling", "gi", "waves", "draw", "fog", "clouds", "texfilter", "hud", "intro", "debug",
+    "lang", "camera", "camfeel", "strafe", "buyall", "lockon", "lockon_strength", "metal_reflect", "camspeed", "mousespeed", "lighting", "ao", "shadows", "display", "renderer", "water", "particles", "sunrays",
+    "smoothing", "vegetation", "culling", "gi", "waves", "draw", "fog", "clouds", "fur", "furstyle", "fire", "smoke", "metal", "texfilter", "hud", "intro", "skipcut", "debug",
 ];
 
 pub const LEVELS: [&str; 4] = ["off", "low", "medium", "high"];
@@ -25,10 +25,16 @@ pub const LANGS: [&str; 5] = ["en", "fr", "de", "es", "it"];
 /// The Strafe aiming row's values (`Options::strafe_byte`) and the game's second key for it (a line the launcher keeps as an extra).
 pub const STRAFE_RAISED: u8 = 0;
 pub const STRAFE_SHOULDER: u8 = 1;
-pub const STRAFE_OFF: u8 = 2;
+/// Steady (game 0.5.0): `strafe=on` + `aimcam=steady`, the camera stays as it is while strafing.
+pub const STRAFE_STEADY: u8 = 2;
+pub const STRAFE_OFF: u8 = 3;
 pub const AIMCAM: &str = "aimcam";
 pub const CAMSPEED_MIN: u32 = 10;
 pub const CAMSPEED_MAX: u32 = 200;
+/// Lock-on strength (`lockon_strength=0..100` in steps of 10, no key = 100) and Metal reflections (`metal_reflect=0..100` in steps of 5,
+/// no key = 75), game 0.5.0.
+pub const LOCKSTR_DEFAULT: u32 = 100;
+pub const METAL_REFLECT_DEFAULT: u32 = 75;
 
 /// The game's `flag()`: the two names plus true/1/yes and false/0/no.
 fn flag(v: &str, yes: &str, no: &str) -> Option<bool> {
@@ -67,21 +73,39 @@ pub fn snap_camspeed(p: u32) -> u32 {
     ((p.min(255) + 5) / 10 * 10).clamp(CAMSPEED_MIN, CAMSPEED_MAX)
 }
 
+/// The game's snaps (pcopts.rs `snap_lockstr`, `snap_metal_refl`): nearest step, at most 100.
+pub fn snap_lockstr(p: u32) -> u32 {
+    ((p.min(255) + 5) / 10 * 10).min(100)
+}
+
+pub fn snap_metal_reflect(p: u32) -> u32 {
+    ((p.min(255) + 2) / 5 * 5).min(100)
+}
+
+fn pct(v: &str) -> Option<u32> {
+    v.trim().trim_end_matches('%').trim().parse::<u32>().ok()
+}
+
 /// The canonical value text of a known key, or None when the game could not read it (the key is then dropped, as the game does).
 pub fn canon(key: &str, v: &str) -> Option<String> {
     match key {
         "lang" => one_of(v, &LANGS),
         "camera" => two(v, "modern", "classic"),
         "camfeel" => two(v, "smooth", "static"),
-        "strafe" | "buyall" | "smoothing" | "culling" | "waves" | "debug" => two(v, "on", "off"),
+        "strafe" | "buyall" | "smoothing" | "culling" | "waves" | "debug" | "metal" | "skipcut" => two(v, "on", "off"),
         "lockon" => one_of(v, &LOCKON),
-        "camspeed" | "mousespeed" => v.trim().trim_end_matches('%').trim().parse::<u32>().ok().map(|n| snap_camspeed(n).to_string()),
+        "camspeed" | "mousespeed" => pct(v).map(|n| snap_camspeed(n).to_string()),
+        "lockon_strength" => pct(v).map(|n| snap_lockstr(n).to_string()),
+        "metal_reflect" => pct(v).map(|n| snap_metal_reflect(n).to_string()),
         "lighting" => match v.trim().to_ascii_lowercase().as_str() {
             "classic" | "original" => Some("classic".into()),
             "enhanced" | "modern" | "experimental" => Some("enhanced".into()),
             _ => None,
         },
-        "ao" | "shadows" | "sunrays" | "gi" => level(v, &LEVELS),
+        "ao" | "shadows" | "sunrays" | "gi" | "fur" | "fire" | "smoke" => level(v, &LEVELS),
+        "furstyle" => {
+            if v.trim().eq_ignore_ascii_case("long") { Some("fluffy".to_string()) } else { two(v, "fluffy", "soft") }
+        }
         "water" | "particles" | "fog" | "clouds" => level(v, &LEVELS_CLASSIC),
         "display" => two(v, "fullscreen", "windowed"),
         "renderer" => one_of(v, &["vulkan", "dx12"]),
@@ -150,7 +174,8 @@ impl Options {
         }
     }
 
-    /// Removes every key the launcher shows (`aimcam` of the Strafe aiming row included); `debug` and unknown keys stay.
+    /// Removes every key the launcher shows (`aimcam` of the Strafe aiming row, the Culling Off marker and the extra lines of the
+    /// Settings rows included); `debug` and unknown keys (controls, ...) stay.
     pub fn reset_all(&mut self) {
         let keep = self.known.get("debug").cloned();
         self.known.clear();
@@ -158,6 +183,10 @@ impl Options {
             self.known.insert("debug", d);
         }
         self.remove_extra(AIMCAM);
+        self.remove_extra(crate::ui::presets::CULLING_MARKER_KEY);
+        for k in crate::pcopts_extra::row_keys() {
+            self.remove_extra(k);
+        }
     }
 
     /// Drops one line the launcher does not know (no-op when it is not there).
@@ -187,26 +216,30 @@ impl Options {
         }
     }
 
-    /// The Strafe aiming row (game 0.4.2): 0 Raised, 1 Shoulder, 2 Off. The game's two keys: `strafe=on|off` (as in every version;
-    /// Off = off) plus `aimcam=shoulder` for Shoulder. Nothing set = Raised, the game's default. As the game reads them
-    /// (`pcinput::strafe_row`): strafe off wins, then `aimcam=shoulder` (any case), anything else is Raised.
+    /// The Strafe aiming row: 0 Raised, 1 Shoulder (game 0.4.2), 2 Steady (game 0.5.0), 3 Off. The game's two keys: `strafe=on|off`
+    /// (as in every version; Off = off) plus `aimcam=shoulder` / `aimcam=steady`. Nothing set = Raised, the game's default. As the game
+    /// reads them (`pcinput::strafe_row`, `modcam::steady::from_opts`): strafe off wins, then `aimcam` (any case), anything else is Raised.
     pub fn strafe_byte(&self) -> u8 {
+        let aimcam = |v: &str| self.extra(AIMCAM).is_some_and(|a| a.trim().eq_ignore_ascii_case(v));
         if self.get("strafe") == Some("off") {
             STRAFE_OFF
-        } else if self.extra(AIMCAM).is_some_and(|v| v.trim().eq_ignore_ascii_case("shoulder")) {
+        } else if aimcam("shoulder") {
             STRAFE_SHOULDER
+        } else if aimcam("steady") {
+            STRAFE_STEADY
         } else {
             STRAFE_RAISED
         }
     }
 
-    /// As the game's menu does (`pcinput::set_strafe_row`): Raised = strafe on, no `aimcam`; Shoulder = strafe on + `aimcam=shoulder`;
-    /// Off = strafe off and a remembered `aimcam` stays (switching strafe back on gives Shoulder again).
+    /// As the game's menu does (`pcinput::set_strafe_row`, `modcam::steady::row_set`): Raised = strafe on, no `aimcam`; Shoulder / Steady
+    /// = strafe on + `aimcam=shoulder` / `aimcam=steady`; Off = strafe off and a remembered `aimcam` stays (switching strafe back on gives
+    /// Shoulder or Steady again).
     pub fn set_strafe_byte(&mut self, b: u8) {
         match b {
-            STRAFE_SHOULDER => {
+            STRAFE_SHOULDER | STRAFE_STEADY => {
                 self.set("strafe", Some("on"));
-                self.set_extra(AIMCAM, Some("shoulder"));
+                self.set_extra(AIMCAM, Some(if b == STRAFE_STEADY { "steady" } else { "shoulder" }));
             }
             STRAFE_OFF => self.set("strafe", Some("off")),
             _ => {
@@ -280,6 +313,30 @@ mod tests {
     }
 
     #[test]
+    fn the_v05_keys_are_known_and_written_as_the_game_writes_them() {
+        let o = Options::parse("version=1
+fur=Medium
+furstyle=long
+fire=low
+smoke=off
+metal=on
+future=1
+");
+        assert_eq!((o.get("fur"), o.get("furstyle"), o.get("fire"), o.get("smoke"), o.get("metal")), (Some("medium"), Some("fluffy"), Some("low"), Some("off"), Some("on")));
+        assert_eq!(o.to_text(), "version=1
+fur=medium
+furstyle=fluffy
+fire=low
+smoke=off
+metal=on
+future=1
+", "known keys in the game's order, unknown last");
+        assert_eq!(Options::parse("fur=classic
+metal=maybe
+").get("metal"), None);
+    }
+
+    #[test]
     fn round_trip_keeps_unknown_keys_and_order() {
         let text = "version=1\nlang=de\ncamera=modern\ncamfeel=static\nstrafe=off\nlockon=off\ncamspeed=70\nmousespeed=120\nlighting=enhanced\nao=low\nshadows=medium\ndisplay=fullscreen\nwater=classic\nparticles=high\nsunrays=off\nsmoothing=off\nvegetation=lush\ngi=medium\nwaves=off\ndraw=high\nhud=original\nfuture_thing=7\nkeys=cross:KeyK\n";
         let o = Options::parse(text);
@@ -319,8 +376,18 @@ mod tests {
     fn strafe_row_maps_to_the_games_two_keys() {
         let row = |t: &str| Options::parse(t).strafe_byte();
         // reading: nothing set / strafe=on = Raised (the default); aimcam=shoulder = Shoulder; strafe=off wins over aimcam; other aimcam = Raised
-        assert_eq!([row(""), row("strafe=on"), row("strafe=off"), row("aimcam=level"), row("strafe=on\naimcam=shoulder"), row("aimcam=SHOULDER")], [0, 0, 2, 0, 1, 1]);
+        assert_eq!([row(""), row("strafe=on"), row("strafe=off"), row("aimcam=level"), row("strafe=on\naimcam=shoulder"), row("aimcam=SHOULDER")], [0, 0, 3, 0, 1, 1]);
         assert_eq!(row("strafe=off\naimcam=shoulder"), STRAFE_OFF);
+        // Steady (game 0.5.0): aimcam=steady; Off keeps it, Raised removes it
+        assert_eq!([row("aimcam=Steady"), row("strafe=off\naimcam=steady")], [STRAFE_STEADY, STRAFE_OFF]);
+        let mut s = Options::new();
+        s.set_strafe_byte(STRAFE_STEADY);
+        assert_eq!(s.to_text(), "version=1\nstrafe=on\naimcam=steady\n");
+        s.set_strafe_byte(STRAFE_OFF);
+        s.set_strafe_byte(STRAFE_STEADY);
+        assert_eq!(s.to_text(), "version=1\nstrafe=on\naimcam=steady\n");
+        s.set_strafe_byte(STRAFE_RAISED);
+        assert_eq!(s.to_text(), "version=1\nstrafe=on\n");
         // writing: Shoulder, then Off keeps aimcam (the game does the same), then Raised removes it
         let mut o = Options::parse("version=1\nlang=de\nfuture=1\n");
         o.set_strafe_byte(STRAFE_SHOULDER);
@@ -333,11 +400,11 @@ mod tests {
         assert_eq!(o.to_text(), "version=1\nlang=de\nstrafe=on\nfuture=1\n");
         assert_eq!(o.strafe_byte(), STRAFE_RAISED);
         // an aimcam line the file already has keeps its place; Reset to defaults takes the row's keys away and keeps unknown lines
-        let mut o = Options::parse("version=1\naimcam=level\nzzz=1\n");
+        let mut o = Options::parse("version=1\naimcam=level\nzzz=1\nhudscale=120\nglyphs=letters\nkeys=r2:Period\nculling=off\nculling_off=kept\n");
         o.set_strafe_byte(STRAFE_SHOULDER);
-        assert_eq!(o.to_text(), "version=1\nstrafe=on\naimcam=shoulder\nzzz=1\n");
+        assert_eq!(o.to_text(), "version=1\nstrafe=on\nculling=off\naimcam=shoulder\nzzz=1\nhudscale=120\nglyphs=letters\nkeys=r2:Period\nculling_off=kept\n");
         o.reset_all();
-        assert_eq!(o.to_text(), "version=1\nzzz=1\n");
+        assert_eq!(o.to_text(), "version=1\nzzz=1\nkeys=r2:Period\n", "the Settings rows' lines and the Culling marker go, the controls stay");
         assert_eq!(o.strafe_byte(), STRAFE_RAISED);
     }
 
@@ -349,6 +416,18 @@ mod tests {
         assert_eq!(Options::parse("mousespeed=86%\ncamspeed=150\n").to_text(), "version=1\ncamspeed=150\nmousespeed=90\n");
         assert_eq!(Options::parse("debug=on\n").to_text(), "version=1\ndebug=on\n");
         assert_eq!(Options::parse("debug=off\n").to_text(), "version=1\n");
+    }
+
+    /// Lock-on strength, Metal reflections (0.5.0) and Start skips cutscenes (0.4.1): the game's own keys, snapped as the game does,
+    /// written in its order (after `lockon`, after `intro`).
+    #[test]
+    fn lockon_strength_metal_reflect_and_skipcut() {
+        let o = Options::parse("skipcut=OFF\nmetal_reflect=63%\nlockon_strength=44\nlockon=on\n");
+        assert_eq!((o.get("lockon_strength"), o.get("metal_reflect"), o.get("skipcut")), (Some("40"), Some("65"), Some("off")));
+        assert_eq!(o.to_text(), "version=1\nlockon=on\nlockon_strength=40\nmetal_reflect=65\nskipcut=off\n");
+        assert_eq!(Options::parse("lockon_strength=250\nmetal_reflect=999\n").to_text(), "version=1\nlockon_strength=100\nmetal_reflect=100\n");
+        assert_eq!(Options::parse("lockon_strength=x\nskipcut=maybe\n").to_text(), "version=1\n");
+        assert_eq!([snap_lockstr(4), snap_lockstr(5), snap_metal_reflect(2), snap_metal_reflect(3)], [0, 10, 0, 5]);
     }
 
     #[test]

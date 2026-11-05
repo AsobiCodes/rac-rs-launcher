@@ -20,9 +20,10 @@ impl App {
             });
             if tabs_visible {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                    let cur = [Tab::Play, Tab::Settings, Tab::Mods].iter().position(|t| *t == self.tab);
-                    if let Some(i) = theme::segmented(ui, "tabs", "Page", &["Play", "Settings", "Mods"], cur) {
-                        let t = [Tab::Play, Tab::Settings, Tab::Mods][i];
+                    let tabs = [Tab::Play, Tab::Settings, Tab::Mods, Tab::Achievements];
+                    let cur = tabs.iter().position(|t| *t == self.tab);
+                    if let Some(i) = theme::segmented(ui, "tabs", "Page", &["Play", "Settings", "Mods", "Achievements"], cur) {
+                        let t = tabs[i];
                         if t != self.tab {
                             self.tab = t;
                             self.confirm_reset = false;
@@ -38,6 +39,8 @@ impl App {
             self.show_settings(ui);
         } else if tabs_visible && self.tab == Tab::Mods {
             self.show_mods(ui);
+        } else if tabs_visible && self.tab == Tab::Achievements {
+            self.show_achievements(ui);
         } else {
             match self.view {
                 View::Run => self.show_run(ui),

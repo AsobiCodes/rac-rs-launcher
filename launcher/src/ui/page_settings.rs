@@ -4,7 +4,6 @@ use super::rows::{self, Group, Kind, Row};
 use super::state::{App, View};
 use super::theme;
 use crate::gating;
-use crate::pcopts::{CAMSPEED_MAX, CAMSPEED_MIN};
 use crate::platform;
 use egui::{RichText, ScrollArea, Ui, Vec2};
 
@@ -36,10 +35,14 @@ impl App {
             ui.add_space(6.0);
             self.settings_presets(ui);
             self.settings_group(ui, "Graphics", Group::Graphics, None);
+            self.settings_group(ui, "Screen and HUD", Group::Display, None);
             let enhanced = rows::lighting_enhanced(&self.options);
             let note = if enhanced { None } else { Some("These effects are part of the Enhanced picture. Set Lighting to Enhanced above to use them.") };
             self.settings_group(ui, "Enhanced picture", Group::Enhanced, note);
+            self.settings_group(ui, "Camera and aiming", Group::Camera, None);
             self.settings_group(ui, "Gameplay", Group::Gameplay, None);
+            let controls = Some("Key and button binding is set in the game: Options > Controls. Reversing the camera (Left / Right, Up / Down) is set there too: the game keeps it in its save, not in this options file.");
+            self.settings_group(ui, "Controls", Group::Controls, controls);
             self.settings_group(ui, "Language", Group::Language, None);
             self.settings_advanced(ui);
             ui.add_space(12.0);
@@ -77,7 +80,8 @@ impl App {
         match row.kind {
             Kind::Choice(list) => list.to_vec(),
             Kind::Strafe => rows::STRAFE_VALUES.to_vec(),
-            Kind::Camera | Kind::Percent => Vec::new(),
+            Kind::Culling => rows::CULLING_VALUES.to_vec(),
+            Kind::Camera | Kind::Percent(_) => Vec::new(),
         }
     }
 
@@ -86,7 +90,8 @@ impl App {
             Kind::Choice(list) => list.iter().map(|(_, l)| *l).collect(),
             Kind::Camera => rows::CAMERA_LABELS.to_vec(),
             Kind::Strafe => rows::STRAFE_VALUES.iter().map(|(_, l)| *l).collect(),
-            Kind::Percent => Vec::new(),
+            Kind::Culling => rows::CULLING_VALUES.iter().map(|(_, l)| *l).collect(),
+            Kind::Percent(_) => Vec::new(),
         }
     }
 
@@ -94,7 +99,7 @@ impl App {
         let total = ui.available_width();
         let labels = Self::row_labels(row);
         let need = match row.kind {
-            Kind::Percent => f32::MAX,
+            Kind::Percent(_) => f32::MAX,
             _ => theme::segmented_width(ui, &labels),
         };
         let stack = need > total * 0.5;
@@ -105,21 +110,27 @@ impl App {
         let values = Self::row_values(row);
         let locked: Vec<bool> = values.iter().map(|(v, _)| !gating::value_available(&self.info.local_version, row.key, v)).collect();
         let value_note = gating::value_needs_text(&self.info.local_version, row.key, &values);
+        let version = self.info.local_version.clone();
         let mut control = |ui: &mut Ui, this: &App| match row.kind {
-            Kind::Percent => speed = Self::percent_control(ui, this, row),
+            Kind::Percent(range) => speed = Self::percent_control(ui, this, row, range),
+            Kind::Culling => picked = theme::segmented_gated(ui, row.key, row.label, &labels, Some(rows::culling_index(&this.options, &version)), &locked),
             _ => picked = theme::segmented_gated(ui, row.key, row.label, &labels, rows::current_index(&this.options, row), &locked),
         };
         // an option this game version does not know yet: greyed, with the reason
         let needs = gating::needs_text(&self.info.local_version, row.key);
         let known = needs.is_none();
+        // a row the other options switch off for now (Upscale quality while the Upscaler is Off, ...): dimmed, still usable, with the reason
+        let inactive = rows::inactive_note(&self.options, row.key).filter(|_| known);
         let label = |ui: &mut Ui| {
             ui.label(theme::bold(row.label, 15.5));
             ui.label(theme::muted(row.help));
             if let Some(n) = needs.as_ref().or(value_note.as_ref()) {
                 ui.label(RichText::new(n.clone()).color(theme::ORANGE).size(13.0));
+            } else if let Some(n) = inactive {
+                ui.label(RichText::new(n).color(theme::ORANGE).size(13.0));
             }
         };
-        if !known {
+        if !known || inactive.is_some() {
             ui.set_opacity(0.55);
         }
         if stack {
@@ -134,7 +145,11 @@ impl App {
             });
         }
         if let Some(i) = picked {
-            rows::choose(&mut self.options, row, i);
+            super::presets::pin_before_change(&mut self.options, &self.info.local_version, row.key);
+            match row.kind {
+                Kind::Culling => rows::choose_culling(&mut self.options, i),
+                _ => rows::choose(&mut self.options, row, i),
+            }
             self.save_options();
         }
         if let Some(s) = speed {
@@ -143,16 +158,17 @@ impl App {
         }
     }
 
-    /// A percent row's slider (Camera speed, Mouse speed) and its "Use default" button. Returns the new value when the player changed it
-    /// (Some(None) = back to default). Camera speed's default is the game's own Slow / Medium / Fast row, Mouse speed's the row's 50.
-    fn percent_control(ui: &mut Ui, this: &App, row: &Row) -> Option<Option<u32>> {
+    /// A percent row's slider (Camera speed, Mouse speed, Lock-on strength, Metal reflections, HUD scale) and its "Use default" button.
+    /// Returns the new value when the player changed it (Some(None) = back to default). Camera speed's default is the game's own
+    /// Slow / Medium / Fast row, the others' the row's `default`.
+    fn percent_control(ui: &mut Ui, this: &App, row: &Row, range: rows::Pct) -> Option<Option<u32>> {
         let cur = rows::percent(&this.options, row.key);
         let mut out = None;
         ui.horizontal(|ui| {
             let mut pct = cur.unwrap_or(row.default.parse().unwrap_or(50)) as f32;
             ui.style_mut().visuals.selection.bg_fill = theme::ORANGE;
             ui.style_mut().spacing.slider_width = 220.0;
-            let r = ui.add(egui::Slider::new(&mut pct, CAMSPEED_MIN as f32..=CAMSPEED_MAX as f32).step_by(10.0).show_value(false));
+            let r = ui.add(egui::Slider::new(&mut pct, range.min as f32..=range.max as f32).step_by(range.step as f64).show_value(false));
             r.widget_info(|| egui::WidgetInfo::slider(true, pct as f64, row.label));
             if r.changed() {
                 out = Some(Some(pct.round() as u32));

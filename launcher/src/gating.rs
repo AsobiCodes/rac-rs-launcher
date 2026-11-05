@@ -31,8 +31,36 @@ pub const FIRST_VERSION: &[(&str, &str)] = &[
     ("fog", "0.4.0"),
     ("clouds", "0.4.0"),
     ("texfilter", "0.4.0"),
+    // pc_options.txt: Fur (Ratchet's fur shader), Fur style, Metal (shiny metal), Fire (realistic flames, burning buildings) and Smoke (volumetric smoke) came with 0.5.0
+    ("fur", "0.5.0"),
+    ("furstyle", "0.5.0"),
+    ("metal", "0.5.0"),
+    ("fire", "0.5.0"),
+    ("smoke", "0.5.0"),
     // pc_options.txt: Skip intro (intro=play|skip)
     ("intro", "0.4.0"),
+    // pc_options.txt: Start skips cutscenes and the Display rows HUD position, HUD scale, FPS limit, Render scale came with 0.4.1
+    ("skipcut", "0.4.1"),
+    ("hudpos", "0.4.1"),
+    ("hudscale", "0.4.1"),
+    ("fps", "0.4.1"),
+    ("renderscale", "0.4.1"),
+    // pc_options.txt: the Controller rows Stick dead zone, Quick Select mouse and Button glyphs came with 0.4.2
+    ("stickdz", "0.4.2"),
+    ("wheelmouse", "0.4.2"),
+    ("glyphs", "0.4.2"),
+    // pc_options.txt: the other rows of the 0.5.0 menu (checked against the public 0.4.3 sources: none of these keys is read there)
+    ("lockon_strength", "0.5.0"),
+    ("metal_reflect", "0.5.0"),
+    ("aspect", "0.5.0"),
+    ("upscaler", "0.5.0"),
+    ("upscale_q", "0.5.0"),
+    ("underwater", "0.5.0"),
+    ("supporters", "0.5.0"),
+    ("wrenchthrow", "0.5.0"),
+    ("qspause", "0.5.0"),
+    ("autogadget", "0.5.0"),
+    ("menustyle", "0.5.0"),
     // texture packs (and the Mods page master ticks, graphics presets) need this game version: the next public release is 0.4.0 (0.3.2 and 0.3.5 were never released)
     (TEXTURE_PACKS, "0.4.0"),
     (SCRIPT_MODS, "0.4.0"),
@@ -48,6 +76,8 @@ pub const FIRST_VERSION_VALUE: &[(&str, &str, &str)] = &[
     ("particles", "medium", "0.3.0"),
     // Strafe aiming: Raised (= strafe on) and Off work everywhere; Shoulder (aimcam=shoulder) came with 0.4.2
     ("strafe", "shoulder", "0.4.2"),
+    // Steady (aimcam=steady) came with 0.5.0; older games read it as Raised
+    ("strafe", "steady", "0.5.0"),
 ];
 
 /// The first game version that knows `key`; None = every version knows it.
@@ -130,6 +160,14 @@ mod tests {
         let t = needs_text("0.3.1", "renderer").unwrap();
         assert!(t.contains("0.4.0") && t.contains("0.3.1"));
         assert!(!available("0.3.1", TEXTURE_PACKS) && available("0.4.0", TEXTURE_PACKS));
+    }
+
+    #[test]
+    fn fur_fire_smoke_and_metal_need_050() {
+        for k in ["fur", "furstyle", "metal", "fire", "smoke"] {
+            assert!(!available("0.4.3", k) && available("0.5.0", k), "{k}");
+            assert!(needs_text("0.4.3", k).unwrap().contains("0.5.0"));
+        }
     }
 
     #[test]

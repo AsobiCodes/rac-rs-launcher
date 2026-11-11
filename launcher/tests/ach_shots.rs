@@ -20,21 +20,26 @@ fn write(p: &Path, t: &str) {
 }
 
 fn app(name: &str, tab: Tab) -> App {
+    app_at(name, tab, "0.5.0", "version=1\nlighting=enhanced\n")
+}
+
+/// A pretend install at game `version` with `options` as its pc_options.txt.
+fn app_at(name: &str, tab: Tab, version: &str, options: &str) -> App {
     let root = std::env::temp_dir().join(format!("racl_v05_{}_{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     write(&root.join("build/release/rac-rs.exe"), "x");
     write(&root.join("Play.cmd"), "x");
     write(&root.join("setup.ps1"), "x");
     write(&root.join("rc.iso"), "disc");
-    write(&root.join("VERSION"), "0.5.0\n");
-    write(&root.join("generated/built_version.txt"), "0.5.0\n");
-    write(&root.join("player/pc_options.txt"), "version=1\nlighting=enhanced\n");
+    write(&root.join("VERSION"), &format!("{version}\n"));
+    write(&root.join("generated/built_version.txt"), &format!("{version}\n"));
+    write(&root.join("player/pc_options.txt"), options);
     write(&root.join("generated/play.cfg"), &format!("iso={}\n", root.join("rc.iso").display()));
     let sample = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ach_sample.json")).unwrap();
     write(&root.join("player/achievements.json"), &sample);
     // no network: the update check reads a local folder that says the installed version is the newest
     let remote = root.join("_remote");
-    write(&remote.join("VERSION"), "0.5.0\n");
+    write(&remote.join("VERSION"), &format!("{version}\n"));
     write(&remote.join("CHANGELOG.md"), "# Changelog\n");
     let mut a = App::new(root.clone(), Some(remote.to_string_lossy().to_string()));
     a.covers.dir = Some(root.join("_no_covers"));
@@ -59,4 +64,15 @@ fn v05_pictures() {
     shot("v05_achievements", app("ach", Tab::Achievements), 700.0);
     shot("v05_achievements_tall", app("ach_tall", Tab::Achievements), 2400.0);
     shot("v05_settings_tall", app("settings", Tab::Settings), 8000.0);
+}
+
+/// The DLSS preset row (game 0.5.1): live with Upscaler DLSS on a 0.5.1 install, greyed ("needs 0.5.1") on a 0.5.0 one.
+#[test]
+#[ignore]
+fn v051_dlss_preset_pictures() {
+    let opts = "version=1\nlighting=enhanced\nupscaler=dlss\ndlss_preset=l\nunderwater=off\n";
+    shot("v051_settings_dlss_l", app_at("v051_dlss", Tab::Settings, "0.5.1", opts), 1400.0);
+    shot("v051_settings_on_050", app_at("v051_on050", Tab::Settings, "0.5.0", opts), 1400.0);
+    shot("v051_settings_fsr", app_at("v051_fsr", Tab::Settings, "0.5.1", "version=1\nlighting=enhanced\nupscaler=fsr\n"), 1400.0);
+    shot("v051_settings_tall", app_at("v051_tall", Tab::Settings, "0.5.1", opts), 8000.0);
 }

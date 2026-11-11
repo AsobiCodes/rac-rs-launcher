@@ -81,6 +81,8 @@ pub const ROWS: &[Row] = &[
     Row { key: "renderscale", label: "Render scale", help: "Draws the picture at this size of the window, then fits it to the window. Below 100% runs faster, above 100% looks sharper.", kind: Kind::Choice(&[("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"), ("150", "150%"), ("200", "200%")]), default: "100", group: Group::Display },
     Row { key: "upscaler", label: "Upscaler", help: "Draws the game smaller, then AMD FSR or NVIDIA DLSS scales it up to the window: faster and nearly as sharp. DLSS needs an NVIDIA RTX graphics card. If your PC cannot run the one you pick, the game uses Off.", kind: Kind::Choice(&[("off", "Off"), ("fsr", "FSR"), ("dlss", "DLSS")]), default: "off", group: Group::Display },
     Row { key: "upscale_q", label: "Upscale quality", help: "The size the game is drawn at before the upscaler, in percent of the window. Lower is faster and softer.", kind: Kind::Choice(&[("native", "Native AA (100%)"), ("quality", "Quality (67%)"), ("balanced", "Balanced (59%)"), ("performance", "Performance (50%)"), ("ultra", "Ultra performance (33%)")]), default: "quality", group: Group::Display },
+    Row { key: "dlss_preset", label: "DLSS preset", help: "Which NVIDIA DLSS model sharpens the picture (Upscaler DLSS only). Auto uses K (L at Ultra performance): the fastest. M is a little sharper with less smearing but slower, L is the sharpest and slowest, J is like K with a bit less smearing but more flicker. M and L run best on RTX 40 cards and newer. Set only here: the game's menu has no row for it.", kind: Kind::Choice(&[("auto", "Auto"), ("m", "M"), ("l", "L"), ("k", "K"), ("j", "J")]), default: "auto", group: Group::Display },
+    Row { key: "scene_msaa", label: "Edge smoothing (MSAA)", help: "Smooths jagged edges by drawing each edge 4 times (4x MSAA). Auto turns it off while DLSS or FSR is on: they smooth edges themselves, and the game runs faster. Always 4x keeps it on with them too: slower, a little smoother on the HUD's 3D items. Without an upscaler the game always uses 4x. Set only here: the game's menu has no row for it.", kind: Kind::Choice(&[("upscaler_off", "Auto"), ("4x", "Always 4x")]), default: "upscaler_off", group: Group::Display },
     Row { key: "fps", label: "FPS limit", help: "The most pictures a second the game draws. Display matches your monitor, Off removes the limit.", kind: Kind::Choice(&[("display", "Display"), ("30", "30"), ("60", "60"), ("120", "120"), ("144", "144"), ("off", "Off")]), default: "display", group: Group::Display },
     Row {
         key: "lighting",
@@ -151,12 +153,12 @@ pub const ROWS: &[Row] = &[
     Row {
         key: "waves",
         label: "Waves",
-        help: "Real moving waves on the sea (with Water on Medium or High).",
+        help: "Real moving waves on the sea (with Water on Medium or High). From game version 0.5.1 the game's own Water row sets this for you (On at Medium and High); here you can set it on its own, for example Water High without waves.",
         kind: Kind::Choice(ON_OFF),
         default: "on",
         group: Group::Enhanced,
     },
-    Row { key: "underwater", label: "Underwater look", help: "Fog while the camera is under water, light patterns from Water Medium, light shafts at High. Off is the original look under water; the water surface stays improved.", kind: Kind::Choice(ON_OFF), default: "on", group: Group::Enhanced },
+    Row { key: "underwater", label: "Underwater look", help: "Fog while the camera is under water, light patterns from Water Medium, light shafts at High. Off is the original look under water; the water surface stays improved. From game version 0.5.1 it is set only here: the game's menu has no row for it.", kind: Kind::Choice(ON_OFF), default: "on", group: Group::Enhanced },
     Row {
         key: "fog",
         label: "Volumetric fog",
@@ -388,6 +390,8 @@ pub fn inactive_note(o: &Options, key: &str) -> Option<&'static str> {
     let val = |k: &str| super::presets::value_of(o, k);
     match key {
         "upscale_q" => (ex("upscaler") == Some("off")).then_some("Applies when the Upscaler is FSR or DLSS."),
+        "dlss_preset" => (ex("upscaler") != Some("dlss")).then_some("Applies when the Upscaler is DLSS."),
+        "scene_msaa" => (ex("upscaler") == Some("off")).then_some("Applies when the Upscaler is FSR or DLSS (without one the game always uses 4x)."),
         "renderscale" => (ex("upscaler") != Some("off")).then_some("Applies while the Upscaler is Off (FSR and DLSS pick their own size)."),
         "lockon_strength" => (val("lockon") == Some("off")).then_some("Applies while Lock-on circle is Auto or On."),
         "metal_reflect" => (val("metal") != Some("on")).then_some("Applies while Metal is On."),
@@ -453,6 +457,12 @@ mod tests {
             assert!(ROWS.iter().any(|r| r.key == key), "the game's {id} row has no launcher row");
         }
         assert!(elsewhere.iter().all(|id| !in_game.contains(id)));
+        // rac-rs v0.5.1 took rows out of its menu (user 2026-11-08, "too many options"): Waves (the Water row sets it), Underwater look
+        // and the MSAA mode and DLSS preset (both new in 0.5.1, never in-game rows) are kept in pc_options.txt and set only here
+        // (user 2026-11-08: the game has the basic options, the launcher is the config with more control)
+        for key in ["waves", "underwater", "dlss_preset", "scene_msaa"] {
+            assert!(ROWS.iter().any(|r| r.key == key), "launcher-only key {key} has no row");
+        }
     }
 
     /// A row the 0.2.x games do not read must name its first game version (the page greys it for older installs).
@@ -561,5 +571,28 @@ mod tests {
         let o = Options::parse("upscaler=dlss\nmetal=on\nlockon=off\nwater=classic\n");
         assert!(inactive_note(&o, "upscale_q").is_none() && inactive_note(&o, "renderscale").is_some());
         assert!(inactive_note(&o, "metal_reflect").is_none() && inactive_note(&o, "lockon_strength").is_some() && inactive_note(&o, "underwater").is_some());
+        // the DLSS preset does something only with the Upscaler on DLSS (also an old `fsr1` line reads FSR)
+        assert!(inactive_note(&o, "dlss_preset").is_none() && inactive_note(&o, "scene_msaa").is_none());
+        assert!(inactive_note(&Options::parse("upscaler=fsr\n"), "scene_msaa").is_none());
+        assert!(inactive_note(&Options::new(), "scene_msaa").is_some(), "no upscaler: always 4x");
+        for up in ["", "upscaler=off\n", "upscaler=fsr\n", "upscaler=fsr1\n", "upscaler=xess\n"] {
+            assert!(inactive_note(&Options::parse(up), "dlss_preset").is_some(), "{up:?}");
+        }
+    }
+
+    /// The DLSS preset row: Auto marked when there is no line, a letter writes `dlss_preset=<letter>`, Auto removes the line.
+    #[test]
+    fn dlss_preset_row_writes_the_game_key() {
+        let r = row("dlss_preset");
+        assert_eq!(r.group, Group::Display);
+        let mut o = Options::parse("version=1\nupscaler=dlss\n");
+        assert_eq!(current_index(&o, r), Some(0), "no line = Auto");
+        for (i, letter) in [(1, "m"), (2, "l"), (3, "k"), (4, "j")] {
+            choose(&mut o, r, i);
+            assert_eq!((o.extra("dlss_preset"), current_index(&o, r)), (Some(letter), Some(i)));
+        }
+        choose(&mut o, r, 0);
+        assert_eq!(o.to_text(), "version=1\nupscaler=dlss\n");
+        assert_eq!(current_index(&Options::parse("dlss_preset=Q\n"), r), Some(0), "an unknown letter = Auto, as the game reads it");
     }
 }

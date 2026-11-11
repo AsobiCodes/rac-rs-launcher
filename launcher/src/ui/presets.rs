@@ -226,7 +226,7 @@ mod tests {
             assert!(matches!(row.group, Group::Graphics | Group::Display | Group::Enhanced), "{k}");
         }
         // never part of a preset (assets/gfx_presets.txt): the game's preset row leaves these as they are
-        let never_v05 = ["aspect", "renderscale", "upscaler", "upscale_q", "fps", "hudpos", "hudscale", "underwater", "metal", "metal_reflect", "supporters", "culling", "lockon_strength", "furstyle"];
+        let never_v05 = ["aspect", "renderscale", "upscaler", "upscale_q", "fps", "hudpos", "hudscale", "underwater", "metal", "metal_reflect", "supporters", "culling", "lockon_strength", "furstyle", "dlss_preset", "scene_msaa"];
         for never in ["camera", "camfeel", "camspeed", "mousespeed", "strafe", "lockon", "buyall", "lang", "renderer", "display", "debug", "keys", "pad"].into_iter().chain(never_v05) {
             assert!(!keys().contains(&never), "{never} must not be part of a preset");
         }

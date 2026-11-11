@@ -61,6 +61,10 @@ pub const FIRST_VERSION: &[(&str, &str)] = &[
     ("qspause", "0.5.0"),
     ("autogadget", "0.5.0"),
     ("menustyle", "0.5.0"),
+    // pc_options.txt: the DLSS preset (dlss_preset=m|l|k|j, no line = Auto) came with 0.5.1; the game's menu has no row for it (launcher only)
+    ("dlss_preset", "0.5.1"),
+    // pc_options.txt: the scene MSAA mode (scene_msaa=4x|upscaler_off, no line = the game's default) came with 0.5.1; launcher only
+    ("scene_msaa", "0.5.1"),
     // texture packs (and the Mods page master ticks, graphics presets) need this game version: the next public release is 0.4.0 (0.3.2 and 0.3.5 were never released)
     (TEXTURE_PACKS, "0.4.0"),
     (SCRIPT_MODS, "0.4.0"),
@@ -168,6 +172,13 @@ mod tests {
             assert!(!available("0.4.3", k) && available("0.5.0", k), "{k}");
             assert!(needs_text("0.4.3", k).unwrap().contains("0.5.0"));
         }
+    }
+
+    #[test]
+    fn dlss_preset_needs_051() {
+        assert!(!available("0.5.0", "dlss_preset") && available("0.5.1", "dlss_preset") && available("0.6.0", "dlss_preset"));
+        assert!(needs_text("0.5.0", "dlss_preset").unwrap().contains("0.5.1"));
+        assert!(!available("0.5.0", "scene_msaa") && available("0.5.1", "scene_msaa"));
     }
 
     #[test]

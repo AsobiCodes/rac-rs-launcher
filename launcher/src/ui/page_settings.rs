@@ -27,7 +27,7 @@ impl App {
     pub fn show_settings(&mut self, ui: &mut Ui) {
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(theme::bold("Settings", 22.0));
-            ui.label(theme::muted("The same options as the game's Pause menu (Options). Your choice is saved at once in the profile and used the next time the game starts."));
+            ui.label(theme::muted("Every option of the game's own Options menu, plus extra settings for more control that only the launcher has. Your choice is saved at once in the profile and used the next time the game starts."));
             ui.add_space(4.0);
             if !self.profile_id.is_empty() {
                 self.profile_header(ui);

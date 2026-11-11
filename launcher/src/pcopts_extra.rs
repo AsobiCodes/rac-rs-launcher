@@ -2,7 +2,8 @@
 //! Controller rows (0.4.2) and most of the 0.5.0 rows. The launcher keeps them as extra lines (`Options::extra`); this table says how
 //! the game reads and writes each one, so a Settings row shows the value the game uses and writes the line the game itself would.
 //! Sources (rac-rs v0.5): viewer/aspect_box.rs, viewer/upscale/choice.rs, viewer/under_choice.rs, retail/pcdisp.rs, retail/pcinput.rs,
-//! retail/glyphs.rs, retail/pcsupp.rs, retail/wrench_throw.rs, retail/qs_pause.rs, retail/auto_gadget.rs, modern_menu/style.rs.
+//! retail/glyphs.rs, retail/pcsupp.rs, retail/wrench_throw.rs, retail/qs_pause.rs, retail/auto_gadget.rs, modern_menu/style.rs;
+//! (rac-rs v0.5.1) viewer/upscale/dlss_preset.rs and viewer/scene_msaa.rs (launcher-only rows: the game's menu has none).
 use crate::pcopts::Options;
 
 /// One extra line of a choice row.
@@ -24,6 +25,12 @@ pub const EXTRA_KEYS: &[ExtraKey] = &[
     ExtraKey { key: "renderscale", values: &["50", "75", "100", "125", "150", "200"], default: "100", unwritten: Some("100") },
     ExtraKey { key: "upscaler", values: &["off", "fsr", "dlss"], default: "off", unwritten: None },
     ExtraKey { key: "upscale_q", values: &["native", "quality", "balanced", "performance", "ultra"], default: "quality", unwritten: None },
+    // game 0.5.1 viewer/upscale/dlss_preset.rs: Auto is never written (the game removes the line); case and spaces ignored, an unknown
+    // value (a removed preset letter, "auto") reads as Auto
+    ExtraKey { key: "dlss_preset", values: &["auto", "m", "l", "k", "j"], default: "auto", unwritten: Some("auto") },
+    // game 0.5.1 viewer/scene_msaa.rs: no line = the game's own default (R&C1: Off with DLSS/FSR), so that value writes no line;
+    // case and spaces ignored, an unknown value = the default
+    ExtraKey { key: "scene_msaa", values: &["upscaler_off", "4x"], default: "upscaler_off", unwritten: Some("upscaler_off") },
     ExtraKey { key: "fps", values: &["display", "30", "60", "120", "144", "off"], default: "display", unwritten: Some("display") },
     // "4:3" is never written: only `corners` is
     ExtraKey { key: "hudpos", values: &["4:3", "corners"], default: "4:3", unwritten: Some("4:3") },
@@ -148,6 +155,40 @@ mod tests {
         assert_eq!(o.to_text(), "version=1\nzzz=1\naspect=auto\nunderwater=on\n", "the values the game writes no line for remove it");
         write(&mut o, extra_key("aspect").unwrap(), "7:5");
         assert_eq!(o.extra("aspect"), Some("auto"), "a value the row does not offer is ignored");
+    }
+
+    /// The game's DLSS preset (0.5.1 dlss_preset.rs `index` / `set`): m l k j in any case; "auto", a missing line or an unknown letter = Auto;
+    /// Auto is never written (the line goes), a letter is written in lower case.
+    #[test]
+    fn dlss_preset_reads_and_writes_like_the_game() {
+        let e = extra_key("dlss_preset").unwrap();
+        assert_eq!([r("dlss_preset", None), r("dlss_preset", Some(" M ")), r("dlss_preset", Some("l")), r("dlss_preset", Some("K")), r("dlss_preset", Some("j"))], ["auto", "m", "l", "k", "j"]);
+        assert_eq!([r("dlss_preset", Some("auto")), r("dlss_preset", Some("e")), r("dlss_preset", Some(""))], ["auto", "auto", "auto"]);
+        let mut o = Options::parse("version=1\nupscaler=dlss\n");
+        write(&mut o, e, "l");
+        assert_eq!(o.to_text(), "version=1\nupscaler=dlss\ndlss_preset=l\n");
+        write(&mut o, e, "k");
+        assert_eq!(o.to_text(), "version=1\nupscaler=dlss\ndlss_preset=k\n");
+        write(&mut o, e, "auto");
+        assert_eq!(o.to_text(), "version=1\nupscaler=dlss\n", "Auto removes the line, never dlss_preset=auto");
+        write(&mut o, e, "x");
+        assert_eq!(o.extra("dlss_preset"), None, "a value the row does not offer is ignored");
+        o.set_extra("dlss_preset", Some("J"));
+        o.reset_all();
+        assert_eq!(o.extra("dlss_preset"), None, "Reset to defaults clears it");
+    }
+
+    /// The game's MSAA mode (0.5.1 scene_msaa.rs `index`): `4x` / `upscaler_off` in any case, anything else = the game's default;
+    /// the default writes no line (the game then uses its own default), 4x is written.
+    #[test]
+    fn scene_msaa_reads_and_writes_like_the_game() {
+        let e = extra_key("scene_msaa").unwrap();
+        assert_eq!([r("scene_msaa", None), r("scene_msaa", Some(" 4X ")), r("scene_msaa", Some("Upscaler_Off")), r("scene_msaa", Some("8x"))], ["upscaler_off", "4x", "upscaler_off", "upscaler_off"]);
+        let mut o = Options::parse("version=1\nscene_msaa=upscaler_off\n");
+        write(&mut o, e, "4x");
+        assert_eq!(o.to_text(), "version=1\nscene_msaa=4x\n");
+        write(&mut o, e, "upscaler_off");
+        assert_eq!(o.to_text(), "version=1\n", "the default removes the line");
     }
 
     #[test]

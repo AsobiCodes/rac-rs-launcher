@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.6
+- Settings: a new "DLSS preset" row in Screen and HUD for game version 0.5.1 or newer: Auto, M, L, K or J, the NVIDIA DLSS model the game asks for. Auto is the game's own choice (K, the fastest, and L at Ultra performance). It only does something while the Upscaler is DLSS; with FSR or Off it is dimmed with a note. Game 0.5.1 has no row for it in its own menu, so the launcher is where you set it. Older games grey it out and nothing is written to their settings file.
+- Settings: a new "Edge smoothing (MSAA)" row for game version 0.5.1 or newer: Auto (the game's default: no MSAA while DLSS or FSR is on, which is faster) or Always 4x. It is dimmed while the Upscaler is Off, because the game then always uses 4x. Set only in the launcher.
+- Settings: the game keeps the basic options in its own menu, and the launcher is where you get more control. The page now says so. Underwater look says that from game version 0.5.1 it is set only in the launcher (the game's menu dropped the row), and Waves says that the game's own Water row sets it for you, while the launcher lets you set it on its own (for example Water High without waves).
+
 ## v0.1.5
 - New: an Achievements tab next to Play, Settings and Mods. It reads the game's achievements file and shows the totals, a filter (all, unlocked, locked), and every achievement with its trophy icon, the date it was unlocked and a progress bar for the ones that count something. Until the game has written the file, the tab says so.
 - Settings: new rows for the picture options that came with game version 0.5.0: Fur (Ratchet's fur shader), Fur style (Soft or Fluffy), Metal (shiny metal reflections), Fire (realistic flames and burning buildings) and Smoke (volumetric smoke). They only show for a game that is version 0.5.0 or newer; older games do not get them, and nothing is written to their settings file.

@@ -1,12 +1,22 @@
 //! Update check: the same sources and rules as setup.ps1 (Read-Remote, Get-ChangelogFor, Compare-Version).
-//! VERSION and CHANGELOG.md come from github.com/AsobiCodes/rac-rs (main); the update itself is done by the setup.ps1 -ApplyUpdate worker
+//! VERSION and CHANGELOG.md come from the game's own repo (R&C 1: AsobiCodes/rac-rs, R&C 2: AsobiCodes/rac-rs2, `GameDef.repo`; branch main); the update itself is done by the setup.ps1 -ApplyUpdate worker
 //! (see engine.rs). A test base (folder, file:// or http URL that serves VERSION and CHANGELOG.md) replaces GitHub.
-use crate::games::is_version;
+use crate::games::{is_version, GameDef};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub const REPO_RAW: &str = "https://raw.githubusercontent.com/AsobiCodes/rac-rs/main";
+/// Where a game's VERSION / CHANGELOG.md live: the raw files of its own repo (never another game's).
+pub fn raw_base(repo: (&str, &str)) -> String {
+    format!("https://raw.githubusercontent.com/{}/{}/main", repo.0, repo.1)
+}
+
+/// Why a remote file could not be read: it is not there (404 / missing file: the repo or release does not exist yet) or the read failed (offline, timeout...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fetch {
+    Missing,
+    Failed,
+}
 
 /// -1 / 0 / 1 like [version]::CompareTo; unreadable parts count as 0. A test suffix ("0.4.0-rc1") sorts just below the same number without it.
 pub fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
@@ -38,22 +48,32 @@ pub fn local_base(base: &str) -> Option<PathBuf> {
     }
 }
 
-/// Text of VERSION / CHANGELOG.md; None on any failure, never panics.
-pub fn read_remote(base: Option<&str>, name: &str, timeout: Duration) -> Option<String> {
-    let base = base.unwrap_or(REPO_RAW);
+/// Text of VERSION / CHANGELOG.md of `repo` (or of the test `base`).
+pub fn fetch_remote(base: Option<&str>, repo: (&str, &str), name: &str, timeout: Duration) -> Result<String, Fetch> {
+    let default = raw_base(repo);
+    let base = base.unwrap_or(&default);
     if let Some(dir) = local_base(base) {
-        return std::fs::read_to_string(dir.join(name)).ok();
+        return std::fs::read_to_string(dir.join(name)).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { Fetch::Missing } else { Fetch::Failed });
     }
     http_get(&format!("{}/{}", base.trim_end_matches('/'), name), timeout)
 }
 
-fn http_get(url: &str, timeout: Duration) -> Option<String> {
-    let cfg = ureq::Agent::config_builder().timeout_global(Some(timeout)).user_agent("rac-rs-launcher");
+/// R&C 1's feed; None on any failure, never panics.
+pub fn read_remote(base: Option<&str>, name: &str, timeout: Duration) -> Option<String> {
+    fetch_remote(base, crate::releases::GAME_REPO, name, timeout).ok()
+}
+
+fn http_get(url: &str, timeout: Duration) -> Result<String, Fetch> {
+    let cfg = ureq::Agent::config_builder().timeout_global(Some(timeout)).user_agent("rac-rs-launcher").http_status_as_error(false);
     #[cfg(windows)]
     let cfg = cfg.tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build());
     let agent: ureq::Agent = cfg.build().into();
-    let mut resp = agent.get(url).call().ok()?;
-    resp.body_mut().read_to_string().ok()
+    let mut resp = agent.get(url).call().map_err(|_| Fetch::Failed)?;
+    match resp.status().as_u16() {
+        200..=299 => resp.body_mut().read_to_string().map_err(|_| Fetch::Failed),
+        404 => Err(Fetch::Missing),
+        _ => Err(Fetch::Failed),
+    }
 }
 
 /// CHANGELOG.md has one section per version, newest first, starting with "## v<version>". Returns the versions newer than `from` up to `to`,
@@ -125,18 +145,24 @@ pub fn evaluate(local: &str, built: &str, remote_version: Option<&str>, changelo
     state
 }
 
-/// Runs the check on a thread; the result lands in `slot`.
-pub fn check_async(local: String, built: String, base: Option<String>, root: PathBuf, slot: Arc<Mutex<UpdateState>>) {
+/// `evaluate` for one game's feed. A game other than R&C 1 whose repo or VERSION does not exist yet (404) is silent: "up to date", no
+/// "Could not check" line (an unfinished rebuild is still offered). A real failure (offline) stays `Offline`.
+pub fn evaluate_feed(game: &GameDef, local: &str, built: &str, remote: &Result<String, Fetch>, changelog: Option<&str>) -> UpdateState {
+    let st = evaluate(local, built, remote.as_deref().ok(), changelog);
+    if st == UpdateState::Offline && game.id != "rac1" && *remote == Err(Fetch::Missing) {
+        return UpdateState::UpToDate(local.to_string());
+    }
+    st
+}
+
+/// Runs the check on a thread against the feed of `game` (its own repo); the result lands in `slot`.
+pub fn check_async(game: &'static GameDef, local: String, built: String, base: Option<String>, root: PathBuf, slot: Arc<Mutex<UpdateState>>) {
     std::thread::spawn(move || {
         let t = Duration::from_millis(4000);
-        let rv = read_remote(base.as_deref(), "VERSION", t);
-        let local_log = std::fs::read_to_string(root.join("CHANGELOG.md")).ok();
-        let log = if rv.as_deref().map(|v| is_version(v.trim()) && compare_version(v.trim(), &local) == std::cmp::Ordering::Greater).unwrap_or(false) {
-            read_remote(base.as_deref(), "CHANGELOG.md", t)
-        } else {
-            local_log
-        };
-        let st = evaluate(&local, &built, rv.as_deref(), log.as_deref());
+        let rv = fetch_remote(base.as_deref(), game.repo, "VERSION", t);
+        let newer = rv.as_deref().map(|v| is_version(v.trim()) && compare_version(v.trim(), &local) == std::cmp::Ordering::Greater).unwrap_or(false);
+        let log = if newer { fetch_remote(base.as_deref(), game.repo, "CHANGELOG.md", t).ok() } else { std::fs::read_to_string(root.join("CHANGELOG.md")).ok() };
+        let st = evaluate_feed(game, &local, &built, &rv, log.as_deref());
         if let Ok(mut g) = slot.lock() {
             *g = st;
         }
@@ -214,5 +240,61 @@ mod tests {
         assert_eq!(read_remote(Some(&url), "VERSION", t).as_deref(), Some("9.9.9\n"));
         assert_eq!(read_remote(Some(d.to_str().unwrap()), "NOPE", t), None);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A local HTTP server answering `n` requests with `status`; returns its base URL and the requested paths.
+    fn serve(status: &str, body: &'static str, n: usize) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = status.to_string();
+        std::thread::spawn(move || {
+            for _ in 0..n {
+                let Ok((mut c, _)) = l.accept() else { return };
+                let mut line = String::new();
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                r.read_line(&mut line).ok();
+                let _ = tx.send(line.split_whitespace().nth(1).unwrap_or("").to_string());
+                let _ = write!(c, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        (base, rx)
+    }
+
+    #[test]
+    fn each_game_reads_its_own_repo() {
+        let (r1, r2) = (crate::games::game_by_id("rac1").unwrap(), crate::games::game_by_id("rac2").unwrap());
+        assert_eq!(raw_base(r1.repo), "https://raw.githubusercontent.com/AsobiCodes/rac-rs/main");
+        assert_eq!(raw_base(r2.repo), "https://raw.githubusercontent.com/AsobiCodes/rac-rs2/main");
+        assert_eq!(raw_base(r2.repo), raw_base(crate::releases::RAC2_REPO));
+    }
+
+    #[test]
+    fn a_404_is_missing_and_a_dead_server_is_failed() {
+        let t = Duration::from_millis(1500);
+        let (base, rx) = serve("404 Not Found", "nope", 1);
+        assert_eq!(fetch_remote(Some(&base), crate::releases::RAC2_REPO, "VERSION", t), Err(Fetch::Missing));
+        assert_eq!(rx.recv().unwrap(), "/VERSION");
+        let (base, _rx) = serve("500 Oops", "x", 1);
+        assert_eq!(fetch_remote(Some(&base), crate::releases::RAC2_REPO, "VERSION", t), Err(Fetch::Failed));
+        let (base, _rx) = serve("200 OK", "0.1.1\n", 1);
+        assert_eq!(fetch_remote(Some(&base), crate::releases::RAC2_REPO, "VERSION", t).as_deref(), Ok("0.1.1\n"));
+        assert_eq!(fetch_remote(Some("http://127.0.0.1:1"), crate::releases::RAC2_REPO, "VERSION", t), Err(Fetch::Failed));
+    }
+
+    #[test]
+    fn feed_rules_per_game() {
+        let (r1, r2) = (crate::games::game_by_id("rac1").unwrap(), crate::games::game_by_id("rac2").unwrap());
+        let ok = |v: &str| Ok::<String, Fetch>(v.to_string());
+        // R&C 2: older than the newest release -> offer; same -> none; 404 -> silent
+        assert!(matches!(evaluate_feed(r2, "0.1.0", "0.1.0", &ok("0.1.1\n"), Some("## v0.1.1\n- a\n")), UpdateState::Available(o) if o.to == "0.1.1"));
+        assert_eq!(evaluate_feed(r2, "0.1.1", "0.1.1", &ok("0.1.1"), None), UpdateState::UpToDate("0.1.1".into()));
+        assert_eq!(evaluate_feed(r2, "0.1.0", "0.1.0", &Err(Fetch::Missing), None), UpdateState::UpToDate("0.1.0".into()));
+        assert_eq!(evaluate_feed(r2, "0.1.0", "0.1.0", &Err(Fetch::Failed), None), UpdateState::Offline);
+        // an unfinished rebuild is still offered when the feed is missing
+        assert!(matches!(evaluate_feed(r2, "0.1.1", "0.1.0", &Err(Fetch::Missing), None), UpdateState::Available(o) if o.finish));
+        // R&C 1 keeps its old behaviour
+        assert_eq!(evaluate_feed(r1, "0.5.1", "0.5.1", &Err(Fetch::Missing), None), UpdateState::Offline);
     }
 }

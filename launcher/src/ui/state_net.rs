@@ -24,6 +24,8 @@ pub enum VersionList {
     Loading,
     Ready(Vec<crate::releases::Release>),
     Failed(String),
+    /// The repo or its release does not exist (HTTP 404): the game is not released yet.
+    NotReleased,
 }
 
 pub struct Net {
@@ -31,6 +33,10 @@ pub struct Net {
     pub game_src: ReleaseSource,
     /// Where launcher updates come from (env `RAC_LAUNCHER_RELEASES`, flag `--launcher-releases`).
     pub launcher_src: ReleaseSource,
+    /// The game the "New install" form is for (`rac1` / `rac2`): its repo, zip name and folder name.
+    pub new_game: &'static str,
+    /// The game of the running download.
+    pub dl_game: &'static str,
     pub game_dl: Option<GameDl>,
     pub dl_error: Option<String>,
     pub self_state: Arc<Mutex<SelfState>>,
@@ -58,6 +64,8 @@ impl Net {
         Net {
             game_src: ReleaseSource::from_override(env("RAC_GAME_RELEASES").as_deref(), releases::GAME_REPO),
             launcher_src: ReleaseSource::from_override(env("RAC_LAUNCHER_RELEASES").as_deref(), releases::LAUNCHER_REPO),
+            new_game: "rac1",
+            dl_game: "rac1",
             game_dl: None,
             dl_error: None,
             self_state: Arc::new(Mutex::new(SelfState::Idle)),
@@ -75,11 +83,43 @@ impl Net {
     }
 }
 
+/// The plain message for a game whose repo or release does not exist yet (HTTP 404).
+pub fn not_released_text(game: &crate::games::GameDef) -> String {
+    format!("{} has not been released yet, so there is nothing to download for it right now. Nothing was changed.", game.title)
+}
+
 impl App {
     // ------------------------------------------------------------------ game download
 
     pub fn downloading(&self) -> bool {
         self.net.game_dl.is_some()
+    }
+
+    /// The game of the "New install" form.
+    pub fn new_game_def(&self) -> &'static crate::games::GameDef {
+        crate::games::game_by_id(self.net.new_game).unwrap_or(&crate::games::GAMES[0])
+    }
+
+    /// Where the zip of `game` comes from: its own repo; a test folder (flag or env) stands in for every game.
+    pub fn game_source(&self, game: &crate::games::GameDef) -> ReleaseSource {
+        match &self.net.game_src {
+            ReleaseSource::Folder(_) => self.net.game_src.clone(),
+            _ if game.id == "rac1" => self.net.game_src.clone(),
+            _ => ReleaseSource::github(game.repo),
+        }
+    }
+
+    /// The form switches to another game: its own version list, pick and (when the folder is still the suggested one) folder name.
+    pub fn set_new_game(&mut self, id: &str) {
+        let Some(g) = crate::games::game_by_id(id).filter(|g| g.supported && g.visible) else { return };
+        if g.id == self.net.new_game {
+            return;
+        }
+        self.net.new_game = g.id;
+        self.net.pick = None;
+        if let Ok(mut v) = self.net.versions.lock() {
+            *v = VersionList::Idle;
+        }
     }
 
     /// Starts the download of the latest game release into `dest` (a missing or empty folder). The caller checked the space.
@@ -94,7 +134,9 @@ impl App {
         // an explicit older version = a pinned install (the newest stays unpinned)
         let newest = self.installable_versions().first().map(|i| i.version.clone());
         self.net.pin_after = want.is_some() && want != newest;
-        self.net.game_dl = Some(GameDl::start(self.net.game_src.clone(), dest.clone(), want));
+        let game = self.new_game_def();
+        self.net.dl_game = game.id;
+        self.net.game_dl = Some(GameDl::start_game(game, self.game_source(game), dest.clone(), want));
         Ok(format!("Downloading the game into {}", dest.display()))
     }
 
@@ -107,10 +149,11 @@ impl App {
             }
             *g = VersionList::Loading;
         }
-        let (src, slot) = (self.net.game_src.clone(), self.net.versions.clone());
+        let (src, slot) = (self.game_source(self.new_game_def()), self.net.versions.clone());
         std::thread::spawn(move || {
             let r = match src.list() {
                 Ok(l) => VersionList::Ready(l),
+                Err(ReleaseError::NotFound) => VersionList::NotReleased,
                 Err(e) => VersionList::Failed(e.text()),
             };
             if let Ok(mut g) = slot.lock() {
@@ -126,7 +169,7 @@ impl App {
     /// What the picker can offer (empty while loading or offline).
     pub fn installable_versions(&self) -> Vec<crate::game_dl::Installable> {
         match self.version_list() {
-            VersionList::Ready(l) => crate::game_dl::installable(&l, self.net.show_test),
+            VersionList::Ready(l) => crate::game_dl::installable_for_game(cfg!(windows), self.new_game_def(), &l, self.net.show_test),
             _ => Vec::new(),
         }
     }
@@ -156,7 +199,7 @@ impl App {
         let dest = self.net.game_dl.take().map(|d| d.dest).unwrap_or_default();
         match res {
             Ok(ver) => {
-                let game = self.rac1();
+                let game = crate::games::game_by_id(self.net.dl_game).unwrap_or(&crate::games::GAMES[0]);
                 let e = self.library.add(game, &dest);
                 if self.net.pin_after {
                     self.library.set_pinned(&e.id, true);
@@ -165,9 +208,14 @@ impl App {
                 self.save_library();
                 self.sel = Sel::Game(game.id);
                 self.select_install(&e.id);
-                self.toast(&format!("RAC-RS {ver} is downloaded. Pick your disc to set the game up."), false);
+                let name = if game.id == "rac1" { "RAC-RS".to_string() } else { format!("RAC-RS {}", game.short.trim_start_matches("R&C ")) };
+                self.toast(&format!("{name} {ver} is downloaded. Pick your disc to set the game up."), false);
             }
             Err(ReleaseError::Cancelled) => self.toast("The download was cancelled. Nothing was kept.", false),
+            Err(ReleaseError::NotFound) if self.net.dl_game != "rac1" => {
+                let g = crate::games::game_by_id(self.net.dl_game).unwrap_or(&crate::games::GAMES[0]);
+                self.net.dl_error = Some(not_released_text(g));
+            }
             Err(e) => self.net.dl_error = Some(e.text()),
         }
     }
@@ -439,5 +487,172 @@ mod tests {
         let t = Transfer::default();
         t.cancel.store(true, Ordering::Relaxed);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    fn game_zip(prefix: &str, ver: &str, script: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip = std::io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(&mut zip);
+        let o = zip::write::SimpleFileOptions::default();
+        for (n, b) in [("VERSION", format!("{ver}
+")), ("setup.ps1", script.to_string()), ("Play.cmd", "x".to_string())] {
+            w.start_file(format!("{prefix}-{ver}/{n}"), o).unwrap();
+            w.write_all(b.as_bytes()).unwrap();
+        }
+        w.finish().unwrap();
+        zip.into_inner()
+    }
+
+    #[test]
+    fn each_game_has_its_own_repo_and_zip_name() {
+        let mut app = App::new(scratch("srchome").join("data"), None);
+        let (r1, r2) = (crate::games::game_by_id("rac1").unwrap(), crate::games::game_by_id("rac2").unwrap());
+        let is = |s: ReleaseSource, repo: &str| matches!(s, ReleaseSource::GitHub { owner, repo: r } if owner == "AsobiCodes" && r == repo);
+        app.net.game_src = ReleaseSource::github(releases::GAME_REPO);
+        assert!(is(app.game_source(r1), "rac-rs") && is(app.game_source(r2), "rac-rs2"));
+        assert_eq!((r2.zip_prefix, r2.min_version), ("rac-rs2", "0.1.0"));
+        // a test folder stands in for every game
+        app.net.game_src = ReleaseSource::Folder(PathBuf::from("X:\rel"));
+        assert!(matches!(app.game_source(r2), ReleaseSource::Folder(_)));
+    }
+
+    #[test]
+    fn new_rac2_install_downloads_rac_rs2_zip_and_is_listed_as_rac2() {
+        let (rel, home) = (scratch("r2rel"), scratch("r2home"));
+        let zip = game_zip("rac-rs2", "0.1.0", "param([string]$Game = 'rac2')");
+        releases::write_test_release(&rel, "v0.1.0", "", &[("rac-rs2-0.1.0.zip", &zip)], &good);
+        let mut app = App::new(home.join("data"), None);
+        app.net.game_src = ReleaseSource::Folder(rel.clone());
+        app.set_new_game("rac2");
+        app.load_versions(true);
+        wait(&mut app, |a| !matches!(a.version_list(), VersionList::Loading));
+        assert_eq!(app.installable_versions().iter().map(|i| i.version.clone()).collect::<Vec<_>>(), vec!["0.1.0"]);
+        let dest = home.join("games").join("rac2");
+        assert!(app.new_install(&dest.to_string_lossy()).is_ok());
+        wait(&mut app, |a| !a.downloading());
+        assert_eq!(app.net.dl_error, None);
+        let e = app.library.find_folder(&dest).expect("listed").clone();
+        assert_eq!(e.game, "rac2");
+        assert!(dest.join("VERSION").is_file() && !dest.join("rac-rs2-0.1.0").exists());
+        assert!(app.is_rac2());
+        // the R&C 1 release feed (a rac-rs-<ver>.zip) is never taken for R&C 2
+        let (rel1, home1) = (scratch("r2rel1"), scratch("r2home1"));
+        releases::write_test_release(&rel1, "v9.9.9", "", &[("rac-rs-9.9.9.zip", &game_zip("rac-rs", "9.9.9", "# s"))], &good);
+        let mut a1 = App::new(home1.join("data"), None);
+        a1.net.game_src = ReleaseSource::Folder(rel1.clone());
+        a1.set_new_game("rac2");
+        a1.start_game_download(home1.join("g"), None).unwrap();
+        wait(&mut a1, |a| !a.downloading());
+        assert!(a1.net.dl_error.is_some() && a1.library.find_folder(&home1.join("g")).is_none(), "{:?}", a1.net.dl_error);
+        for d in [rel, home, rel1, home1] {
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    #[test]
+    fn a_missing_rac2_release_says_not_released_yet() {
+        let home = scratch("r2miss");
+        let mut app = App::new(home.join("data"), None);
+        app.net.game_src = ReleaseSource::Folder(home.join("nothing_here"));
+        app.set_new_game("rac2");
+        app.load_versions(true);
+        wait(&mut app, |a| !matches!(a.version_list(), VersionList::Loading));
+        assert_eq!(app.version_list(), VersionList::NotReleased);
+        app.start_game_download(home.join("g"), None).unwrap();
+        wait(&mut app, |a| !a.downloading());
+        let m = app.net.dl_error.clone().unwrap();
+        assert!(m.contains("Ratchet & Clank 2 has not been released yet") && !m.contains("HTTP") && !m.contains("404"), "{m}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Installs an R&C 2 0.1.0 from a test folder that is also the update base (VERSION = `feed`), returns the app.
+    fn rac2_app_with_feed(tag: &str, feed: Option<&str>) -> (App, PathBuf, PathBuf) {
+        let (rel, home) = (scratch(&format!("{tag}rel")), scratch(&format!("{tag}home")));
+        let zip = game_zip("rac-rs2", "0.1.0", "param([string]$Game = 'rac2')");
+        releases::write_test_release(&rel, "v0.1.0", "", &[("rac-rs2-0.1.0.zip", &zip)], &good);
+        if let Some(f) = feed {
+            std::fs::write(rel.join("VERSION"), format!("{f}\n")).unwrap();
+            std::fs::write(rel.join("CHANGELOG.md"), format!("## v{f}\n- R2 fix\n\n## v0.1.0\n- first\n")).unwrap();
+        }
+        let mut app = App::new(home.join("data"), Some(rel.to_string_lossy().to_string()));
+        app.net.game_src = ReleaseSource::Folder(rel.clone());
+        app.set_new_game("rac2");
+        let dest = home.join("games").join("rac2");
+        app.start_game_download(dest.clone(), None).unwrap();
+        wait(&mut app, |a| !a.downloading());
+        assert_eq!(app.net.dl_error, None);
+        assert!(app.library.find_folder(&dest).is_some());
+        (app, rel, home)
+    }
+
+    /// Makes the open install look finished (game exe + generated\play.cfg) so that the update check runs.
+    fn fake_installed(app: &mut App) {
+        let (root, g) = (app.root.clone(), app.rac1());
+        let exe = g.exe_path(&root);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::write(root.join("generated").join("play.cfg"), "iso=none.iso
+").unwrap();
+        std::fs::write(root.join("generated").join("built_version.txt"), format!("{}
+", crate::games::local_version(&root))).unwrap();
+        app.refresh_info();
+        assert!(app.info.installed);
+    }
+
+    fn settle(app: &mut App) -> crate::update::UpdateState {
+        fake_installed(app);
+        app.check_updates();
+        for _ in 0..300 {
+            let s = app.update_state();
+            if s != crate::update::UpdateState::Checking {
+                return s;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("update check timeout");
+    }
+
+    #[test]
+    fn rac2_install_is_offered_a_newer_rac2_release_and_only_that() {
+        use crate::update::UpdateState as U;
+        let (mut app, rel, home) = rac2_app_with_feed("r2up", Some("0.1.1"));
+        assert!(app.is_rac2() && app.rac1().repo == releases::RAC2_REPO && app.rac1().repo != releases::GAME_REPO);
+        match settle(&mut app) {
+            U::Available(o) => assert_eq!((o.from.as_str(), o.to.as_str(), o.finish), ("0.1.0", "0.1.1", false)),
+            s => panic!("{s:?}"),
+        }
+        // same version: nothing to offer
+        std::fs::write(rel.join("VERSION"), "0.1.0\n").unwrap();
+        assert_eq!(settle(&mut app), U::UpToDate("0.1.0".into()));
+        // the feed does not exist (the repo has no VERSION / 404): silent, not "Could not check"
+        std::fs::remove_file(rel.join("VERSION")).unwrap();
+        assert_eq!(settle(&mut app), U::UpToDate("0.1.0".into()));
+        for d in [rel, home] {
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    #[test]
+    fn rac1_install_keeps_its_own_feed_and_offline_wording() {
+        use crate::update::UpdateState as U;
+        let (rel, home) = (scratch("r1up_rel"), scratch("r1up_home"));
+        let zip = game_zip("rac-rs", "0.5.1", "param([string]$Game = 'rac1')");
+        releases::write_test_release(&rel, "v0.5.1", "", &[("rac-rs-0.5.1.zip", &zip)], &good);
+        std::fs::write(rel.join("VERSION"), "0.5.2\n").unwrap();
+        let mut app = App::new(home.join("data"), Some(rel.to_string_lossy().to_string()));
+        app.net.game_src = ReleaseSource::Folder(rel.clone());
+        app.set_new_game("rac1");
+        let dest = home.join("games").join("rac1");
+        app.start_game_download(dest.clone(), None).unwrap();
+        wait(&mut app, |a| !a.downloading());
+        assert!(!app.is_rac2() && app.rac1().repo == releases::GAME_REPO && app.rac1().repo != releases::RAC2_REPO);
+        assert!(matches!(settle(&mut app), U::Available(o) if o.to == "0.5.2"));
+        // R&C 1 without a feed is still "offline" as before
+        std::fs::remove_file(rel.join("VERSION")).unwrap();
+        assert_eq!(settle(&mut app), U::Offline);
+        for d in [rel, home] {
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
 }

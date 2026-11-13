@@ -91,6 +91,15 @@ pub fn open_saves(root: &Path) -> std::io::Result<PathBuf> {
 
 pub const SAVES_HINT: &str = "Copy card.bin (your memory card) between installs to move your saves. Close the game first.";
 
+/// The saves hint of a game: R&C 2 keeps its memory card as `card.mcd` (rac2/boot.rs), R&C 1 as `card.bin`.
+pub fn saves_hint(game_id: &str) -> &'static str {
+    if game_id == "rac2" {
+        "Copy card.mcd (your memory card) between installs to move your saves. Close the game first."
+    } else {
+        SAVES_HINT
+    }
+}
+
 /// The game's run log: `log.txt` in the saves folder (the run before it is `log.prev.txt` there).
 pub fn log_file(root: &Path) -> PathBuf {
     saves_dir(root).join("log.txt")

@@ -171,10 +171,35 @@ pub fn default_install_folder() -> PathBuf {
 }
 
 pub fn default_install_folder_for(windows: bool, documents: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    default_install_folder_title(windows, documents, home, "Ratchet & Clank")
+}
+
+/// The folder a new install of the game with this title suggests (R&C 2: `...\Ratchet & Clank 2`, next to the R&C 1 one).
+pub fn default_install_folder_game(game: &GameDef) -> PathBuf {
+    default_install_folder_title(cfg!(windows), crate::platform::known_folder(crate::platform::Known::Documents), std::env::var_os("HOME").map(PathBuf::from), game.title)
+}
+
+pub fn default_install_folder_title(windows: bool, documents: Option<PathBuf>, home: Option<PathBuf>, title: &str) -> PathBuf {
     if windows {
-        documents.unwrap_or_else(|| PathBuf::from(".")).join("RAC-RS").join("Ratchet & Clank")
+        documents.unwrap_or_else(|| PathBuf::from(".")).join("RAC-RS").join(title)
     } else {
-        home.or(documents).unwrap_or_else(|| PathBuf::from(".")).join("Games").join("Ratchet & Clank")
+        home.or(documents).unwrap_or_else(|| PathBuf::from(".")).join("Games").join(title)
+    }
+}
+
+/// The game an unpacked, not yet set-up release tree is for, read from its setup script: the R&C 2 script defaults to `rac2`
+/// (`$Game = 'rac2'`) and builds `rac2-play`; the R&C 1 script is the other one. None = cannot tell.
+pub fn tree_game(dir: &Path) -> Option<&'static str> {
+    let t = std::fs::read(dir.join(SETUP_SCRIPT)).ok()?;
+    let t = String::from_utf8_lossy(&t);
+    if t.contains("$Game = 'rac2'") || t.contains("GAME=rac2") {
+        Some("rac2")
+    } else if t.contains("$Game = 'rac1'") || t.contains("GAME=rac1") {
+        Some("rac1")
+    } else if t.contains("rac2-play") {
+        Some("rac2")
+    } else {
+        Some("rac1")
     }
 }
 
@@ -289,7 +314,8 @@ impl Library {
         if !is_release_tree(exe_dir) || self.find_folder(exe_dir).is_some() {
             return None;
         }
-        let game = games::game_by_id("rac1")?;
+        // the game whose exe is built here; an unpacked tree that is not set up yet is R&C 1 (the downloadable game)
+        let game = check_folder(exe_dir).ok().and_then(|f| games::game_by_id(f.game)).or_else(|| games::game_by_id("rac1"))?;
         Some(self.add(game, exe_dir))
     }
 
@@ -464,5 +490,31 @@ mod tests {
         assert_eq!(size_text(5 * 1024 * 1024 + 300_000), "5.3 MB");
         assert_eq!(size_text(340 * 1024), "340 KB");
         assert_eq!(size_text(120 * 1024 * 1024 * 1024), "120 GB");
+    }
+
+    #[test]
+    fn an_unpacked_tree_is_told_apart_by_its_setup_script() {
+        let d = std::env::temp_dir().join(format!("racl_tree_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(tree_game(&d), None);
+        let w = |s: &str| std::fs::write(d.join(SETUP_SCRIPT), s).unwrap();
+        w("param([switch]$Console)
+# the public R&C1 script");
+        assert_eq!(tree_game(&d), Some("rac1"));
+        w("param([ValidateSet('rac1', 'rac2')][string]$Game = 'rac2')");
+        assert_eq!(tree_game(&d), Some("rac2"));
+        w("param([ValidateSet('rac1', 'rac2')][string]$Game = 'rac1')
+ rac2-play");
+        assert_eq!(tree_game(&d), Some("rac1"));
+        w("GAME=rac2
+");
+        assert_eq!(tree_game(&d), Some("rac2"));
+        w("exe=build/release/rac2-play
+");
+        assert_eq!(tree_game(&d), Some("rac2"));
+        let docs = Some(PathBuf::from("D:/Docs"));
+        assert_eq!(default_install_folder_title(true, docs, None, "Ratchet & Clank 2"), PathBuf::from("D:/Docs").join("RAC-RS").join("Ratchet & Clank 2"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

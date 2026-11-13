@@ -513,7 +513,7 @@ mod tests {
         std::fs::write(d.join("Play.cmd"), "set \"RAC_PLAYER_DIR=%~dp0saves\"\r\n").unwrap();
         assert_eq!(file_path(&d, g), d.join("saves").join("achievements.json"));
         let g2 = crate::games::game_by_id("rac2").unwrap();
-        assert_eq!(file_path(&d, g2), d.join("rac2").join("player").join("achievements.json"));
+        assert_eq!(file_path(&d, g2), d.join("player").join("achievements.json"), "R&C 2 has its own install folder; its achievements come in v0.2");
         let _ = std::fs::remove_dir_all(&d);
     }
 

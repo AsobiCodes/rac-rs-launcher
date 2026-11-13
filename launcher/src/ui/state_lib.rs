@@ -103,7 +103,7 @@ impl App {
     /// Opens an install from the sidebar or the Library page. Refused while something runs.
     pub fn select_install(&mut self, id: &str) -> bool {
         if self.cur_id.as_deref() == Some(id) {
-            self.sel = Sel::Game("rac1");
+            self.sel = Sel::Game(self.rac1().id);
             return true;
         }
         if self.busy() || self.game_running() {
@@ -114,7 +114,7 @@ impl App {
             return false;
         }
         self.enter_install(id);
-        self.sel = Sel::Game("rac1");
+        self.sel = Sel::Game(self.rac1().id);
         true
     }
 
@@ -132,7 +132,7 @@ impl App {
         self.save_library();
         let version = crate::games::local_version(&e.path());
         self.select_install(&e.id);
-        Ok(format!("Added Ratchet & Clank {version} from {}", e.folder))
+        Ok(format!("Added {} {version} from {}", crate::games::game_by_id(&e.game).map(|g| g.title).unwrap_or("Ratchet & Clank"), e.folder))
     }
 
     /// "New install" with the typed or picked folder. A folder that already holds an unpacked RAC-RS release is listed as it is;
@@ -162,7 +162,12 @@ impl App {
                 return Err(p);
             }
         }
-        let game = self.rac1();
+        // a folder of a release tree that is already set up is listed as the game it holds; an unpacked one as the game its setup script is for
+        let game = library::check_folder(&dir)
+            .ok()
+            .and_then(|f| crate::games::game_by_id(f.game))
+            .or_else(|| library::tree_game(&dir).and_then(crate::games::game_by_id))
+            .unwrap_or_else(|| crate::games::game_by_id("rac1").unwrap_or(&crate::games::GAMES[0]));
         let e = self.library.add(game, &dir);
         self.save_library();
         self.select_install(&e.id);

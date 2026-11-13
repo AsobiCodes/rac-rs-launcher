@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.7
+- New: Ratchet & Clank 2 (RAC-RS 2). Library > New install now has a "Game" choice: Ratchet & Clank or Ratchet & Clank 2. R&C 2 downloads from its own project page, goes into its own folder (Ratchet & Clank 2), and is set up from your PAL / Europe disc (SCES-51607), the same way as R&C 1. Until R&C 2 is released the launcher says "Ratchet & Clank 2 has not been released yet" instead of an error.
+- R&C 2 installs get their own pages: Play and Settings; the Mods and Achievements tabs are shown greyed out (R&C 2 has neither yet). The Settings page lists only the options R&C 2 really has, with R&C 2's own defaults and help texts (no Buy all ammo switch: R&C 2's vendor always has it); Resolution, the Graphics Preset and the key bindings are set in the game. Automatic update checks work for R&C 2 the same way as for R&C 1, against R&C 2's own project page (never R&C 1's); an R&C 1 update is never offered to or applied on an R&C 2 folder, or the other way round. While R&C 2 has no release yet, the check says nothing.
+- Several games, one toolchain: when you set up a second game and another install of yours already has its build tools (Rust and Python, about 220 MB), the launcher tells the setup to reuse them instead of downloading them again. Only done for a setup that knows how (R&C 2); the current R&C 1 setup keeps downloading its own.
+- Disc check: a disc of the other game now says so (for example "This is the disc image of Ratchet & Clank, but this install is Ratchet & Clank 2") and every message names the discs that game accepts. The set-up page, the file picker and the install title use the name of the game being installed.
+- Everything from v0.1.6 stays.
+
 ## v0.1.6
 - Settings: a new "DLSS preset" row in Screen and HUD for game version 0.5.1 or newer: Auto, M, L, K or J, the NVIDIA DLSS model the game asks for. Auto is the game's own choice (K, the fastest, and L at Ultra performance). It only does something while the Upscaler is DLSS; with FSR or Off it is dimmed with a note. Game 0.5.1 has no row for it in its own menu, so the launcher is where you set it. Older games grey it out and nothing is written to their settings file.
 - Settings: a new "Edge smoothing (MSAA)" row for game version 0.5.1 or newer: Auto (the game's default: no MSAA while DLSS or FSR is on, which is faster) or Always 4x. It is dimmed while the Upscaler is Off, because the game then always uses 4x. Set only in the launcher.

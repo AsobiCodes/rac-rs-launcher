@@ -17,6 +17,8 @@ use crate::stall_guard::StallGuard;
 
 pub const API_BASE: &str = "https://api.github.com/repos";
 pub const GAME_REPO: (&str, &str) = ("AsobiCodes", "rac-rs");
+/// R&C 2 has its own repo and its own release zip `rac-rs2-<VER>.zip` (top folder `rac-rs2-<VER>/`). The ONE place that names the repo (not confirmed yet).
+pub const RAC2_REPO: (&str, &str) = ("AsobiCodes", "rac-rs2");
 pub const LAUNCHER_REPO: (&str, &str) = ("AsobiCodes", "rac-rs-launcher");
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

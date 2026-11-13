@@ -133,8 +133,12 @@ impl App {
                     }
                 });
             }
+            VersionList::NotReleased => {
+                ui.label(theme::muted(&crate::ui::state_net::not_released_text(self.new_game_def())));
+            }
             VersionList::Ready(_) if list.is_empty() => {
-                ui.label(theme::muted("No downloadable version was found."));
+                let g = self.new_game_def();
+                ui.label(theme::muted(&if g.id == "rac1" { "No downloadable version was found.".to_string() } else { crate::ui::state_net::not_released_text(g) }));
             }
             VersionList::Ready(_) => {
                 let text_of = |i: &crate::game_dl::Installable| {

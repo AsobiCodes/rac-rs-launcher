@@ -27,13 +27,19 @@ impl App {
     pub fn show_settings(&mut self, ui: &mut Ui) {
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(theme::bold("Settings", 22.0));
-            ui.label(theme::muted("Every option of the game's own Options menu, plus extra settings for more control that only the launcher has. Your choice is saved at once in the profile and used the next time the game starts."));
+            ui.label(theme::muted(if self.is_rac2() {
+                "The options of the game's own Options menu, plus a few extra settings that only the launcher has. Resolution, the Graphics Preset and the key bindings are set in the game. Your choice is saved at once in the profile and used the next time the game starts."
+            } else {
+                "Every option of the game's own Options menu, plus extra settings for more control that only the launcher has. Your choice is saved at once in the profile and used the next time the game starts."
+            }));
             ui.add_space(4.0);
             if !self.profile_id.is_empty() {
                 self.profile_header(ui);
             }
             ui.add_space(6.0);
-            self.settings_presets(ui);
+            if !self.is_rac2() {
+                self.settings_presets(ui);
+            }
             self.settings_group(ui, "Graphics", Group::Graphics, None);
             self.settings_group(ui, "Screen and HUD", Group::Display, None);
             let enhanced = rows::lighting_enhanced(&self.options);
@@ -41,7 +47,11 @@ impl App {
             self.settings_group(ui, "Enhanced picture", Group::Enhanced, note);
             self.settings_group(ui, "Camera and aiming", Group::Camera, None);
             self.settings_group(ui, "Gameplay", Group::Gameplay, None);
-            let controls = Some("Key and button binding is set in the game: Options > Controls. Reversing the camera (Left / Right, Up / Down) is set there too: the game keeps it in its save, not in this options file.");
+            let controls = Some(if self.is_rac2() {
+                "Key and mouse binding is set in the game (Options > Controls). This file keeps your bindings as they are."
+            } else {
+                "Key and button binding is set in the game: Options > Controls. Reversing the camera (Left / Right, Up / Down) is set there too: the game keeps it in its save, not in this options file."
+            });
             self.settings_group(ui, "Controls", Group::Controls, controls);
             self.settings_group(ui, "Language", Group::Language, None);
             self.settings_advanced(ui);
@@ -62,7 +72,7 @@ impl App {
             if dim {
                 ui.set_opacity(0.55);
             }
-            let list: Vec<&'static Row> = rows::rows_of(group).collect();
+            let list: Vec<&'static Row> = super::rows_rc2::rows_for(self.rac1().id, group);
             let n = list.len();
             for (i, row) in list.into_iter().enumerate() {
                 ui.add_enabled_ui(!ro, |ui| self.settings_row(ui, row));
@@ -108,16 +118,19 @@ impl App {
         let mut speed: Option<Option<u32>> = None;
         // values of this row that the game version ignores (per-value rows of the gating table): greyed segments, with the reason
         let values = Self::row_values(row);
-        let locked: Vec<bool> = values.iter().map(|(v, _)| !gating::value_available(&self.info.local_version, row.key, v)).collect();
-        let value_note = gating::value_needs_text(&self.info.local_version, row.key, &values);
-        let version = self.info.local_version.clone();
+        let version = self.gate_version();
+        let locked: Vec<bool> = values.iter().map(|(v, _)| !gating::value_available(&version, row.key, v)).collect();
+        let value_note = gating::value_needs_text(&version, row.key, &values);
         let mut control = |ui: &mut Ui, this: &App| match row.kind {
             Kind::Percent(range) => speed = Self::percent_control(ui, this, row, range),
             Kind::Culling => picked = theme::segmented_gated(ui, row.key, row.label, &labels, Some(rows::culling_index(&this.options, &version)), &locked),
-            _ => picked = theme::segmented_gated(ui, row.key, row.label, &labels, rows::current_index(&this.options, row), &locked),
+            _ => {
+                let cur = if this.is_rac2() { super::rows_rc2::current_index(&this.options, row) } else { rows::current_index(&this.options, row) };
+                picked = theme::segmented_gated(ui, row.key, row.label, &labels, cur, &locked)
+            }
         };
         // an option this game version does not know yet: greyed, with the reason
-        let needs = gating::needs_text(&self.info.local_version, row.key);
+        let needs = gating::needs_text(&version, row.key);
         let known = needs.is_none();
         // a row the other options switch off for now (Upscale quality while the Upscaler is Off, ...): dimmed, still usable, with the reason
         let inactive = rows::inactive_note(&self.options, row.key).filter(|_| known);
@@ -145,7 +158,10 @@ impl App {
             });
         }
         if let Some(i) = picked {
-            super::presets::pin_before_change(&mut self.options, &self.info.local_version, row.key);
+            // R&C 1 only: R&C 2 reads a missing Fur / Fire / Smoke line as High whatever the other rows say, so there is nothing to pin
+            if !self.is_rac2() {
+                super::presets::pin_before_change(&mut self.options, &version, row.key);
+            }
             match row.kind {
                 Kind::Culling => rows::choose_culling(&mut self.options, i),
                 _ => rows::choose(&mut self.options, row, i),

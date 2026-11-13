@@ -19,6 +19,31 @@ pub struct ExtraKey {
 
 const ON_OFF: &[&str] = &["on", "off"];
 const OFF_ON: &[&str] = &["off", "on"];
+const PICTURE_STEPS: &[&str] = &["0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100"];
+
+/// Brightness / contrast sliders (game picture_adjust.rs): 0..=100 in steps of 5, no line = 50, the game removes the line at 50.
+pub const PICTURE_MAX: u32 = 100;
+pub const PICTURE_STEP: u32 = 5;
+pub const PICTURE_NEUTRAL: u32 = 50;
+
+pub fn is_picture(key: &str) -> bool {
+    matches!(key, "brightness" | "contrast")
+}
+
+/// The game's snap (picture_adjust.rs `snap`): clamped to 0..=100, nearest step of 5 (half up).
+pub fn snap_picture(v: u32) -> u32 {
+    ((v.min(PICTURE_MAX) + PICTURE_STEP / 2) / PICTURE_STEP * PICTURE_STEP).min(PICTURE_MAX)
+}
+
+/// The slider value the player set (None = no line: 50); a line the game cannot parse reads 50, like the game.
+pub fn picture(o: &Options, key: &str) -> Option<u32> {
+    o.extra(key).map(|v| v.trim().trim_end_matches('%').trim().parse::<i64>().map_or(PICTURE_NEUTRAL, |n| snap_picture(n.max(0) as u32)))
+}
+
+pub fn set_picture(o: &mut Options, key: &str, pct: Option<u32>) {
+    let v = pct.map(snap_picture).filter(|&p| p != PICTURE_NEUTRAL);
+    o.set_extra(key, v.map(|p| p.to_string()).as_deref());
+}
 
 pub const EXTRA_KEYS: &[ExtraKey] = &[
     ExtraKey { key: "aspect", values: &["auto", "4:3", "16:9", "16:10", "21:9", "32:9"], default: "auto", unwritten: None },
@@ -43,6 +68,20 @@ pub const EXTRA_KEYS: &[ExtraKey] = &[
     ExtraKey { key: "stickdz", values: &["retail", "small", "minimal"], default: "retail", unwritten: Some("retail") },
     ExtraKey { key: "wheelmouse", values: OFF_ON, default: "off", unwritten: Some("off") },
     ExtraKey { key: "glyphs", values: &["playstation", "letters", "switch"], default: "playstation", unwritten: Some("playstation") },
+    // R&C 2 only (rac2 options.rs / pc_prompts.rs / modern_rows_video.rs): key names in prompts (default on), movie subtitles (default off)
+    ExtraKey { key: "keyprompts", values: ON_OFF, default: "on", unwritten: None },
+    // R&C 2 build 48 (rac2 modern_rows_display.rs, modern_rows_metal.rs, modcam_mouseinv.rs; engine fgen/choice.rs, picture_adjust.rs,
+    // metal_detail.rs). framegen: the game writes every choice, Off too; no line = off.
+    ExtraKey { key: "framegen", values: &["off", "fsr", "dlss2", "dlss3", "dlss4"], default: "off", unwritten: None },
+    // metal_detail: the game writes high/medium/low; no line = High (R&C 2's default); Full is the engine default only, no row offers it
+    ExtraKey { key: "metal_detail", values: &["low", "medium", "high"], default: "high", unwritten: None },
+    // mouse_ud / mouse_lr: no line = Like camera (the mouse follows the game's own Reversed option); the game removes the line for it
+    ExtraKey { key: "mouse_ud", values: &["like", "normal", "inverted"], default: "like", unwritten: Some("like") },
+    ExtraKey { key: "mouse_lr", values: &["like", "normal", "inverted"], default: "like", unwritten: Some("like") },
+    // brightness / contrast: the game snaps to steps of 5 (0..100) and writes no line at 50; the Settings row is a slider (see `picture`)
+    ExtraKey { key: "brightness", values: PICTURE_STEPS, default: "50", unwritten: Some("50") },
+    ExtraKey { key: "contrast", values: PICTURE_STEPS, default: "50", unwritten: Some("50") },
+    ExtraKey { key: "subtitles", values: OFF_ON, default: "off", unwritten: None },
 ];
 
 /// The HUD scale slider (`hudscale=75..150` in steps of 5, no line = 100, the game removes the line at 100).
@@ -87,6 +126,8 @@ pub fn read(e: &ExtraKey, raw: Option<&str>) -> &'static str {
         // `off`, else a number > 0 = the nearest listed limit (30..144), anything else = the display's rate (pcdisp.rs `parse_fps`)
         "fps" if v == "off" => Some("off"),
         "fps" => v.parse::<u32>().ok().filter(|&n| n > 0).and_then(|n| nearest(&e.values[1..5], n)),
+        // the game reads `70%` and ` 70 `, snaps to 5; snapped to the nearest step of 5; not a number = 50
+        "brightness" | "contrast" => v.trim_end_matches('%').trim().parse::<u32>().ok().and_then(|n| nearest(e.values, n.min(100))),
         "wheelmouse" if v == "1" || v == "true" => Some("on"),
         // these read On only for `on` (supporters, qspause, autogadget, wheelmouse) or Off only for `off` (underwater): the default covers the rest
         _ => found(&v),
@@ -140,6 +181,34 @@ mod tests {
         assert_eq!([r("supporters", Some("yes")), r("supporters", Some(" On "))], ["off", "on"]);
         assert_eq!([r("wheelmouse", Some("1")), r("wheelmouse", Some("true")), r("wheelmouse", Some("no"))], ["on", "on", "off"]);
         assert_eq!([r("stickdz", Some("Small")), r("glyphs", Some("switch")), r("menustyle", Some("CLASSIC")), r("wrenchthrow", Some("moving"))], ["small", "switch", "classic", "moving"]);
+    }
+
+    #[test]
+    fn the_build_48_lines_read_like_the_game() {
+        assert_eq!([r("framegen", None), r("framegen", Some("DLSS3")), r("framegen", Some("xess"))], ["off", "dlss3", "off"]);
+        assert_eq!([r("metal_detail", None), r("metal_detail", Some(" Low ")), r("metal_detail", Some("full"))], ["high", "low", "high"]);
+        assert_eq!([r("mouse_ud", None), r("mouse_ud", Some("Inverted")), r("mouse_lr", Some("normal")), r("mouse_lr", Some("up"))], ["like", "inverted", "normal", "like"]);
+        assert_eq!([r("brightness", None), r("brightness", Some("70%")), r("brightness", Some("55")), r("contrast", Some("dark")), r("contrast", Some("400"))], ["50", "70", "55", "50", "100"]);
+        let mut p = Options::new();
+        set_picture(&mut p, "brightness", Some(63));
+        assert_eq!((p.extra("brightness"), picture(&p, "brightness")), (Some("65"), Some(65)));
+        set_picture(&mut p, "brightness", Some(50));
+        assert_eq!((p.extra("brightness"), picture(&p, "brightness")), (None, None), "50 writes no line");
+        assert_eq!(picture(&Options::parse("contrast=120%\n"), "contrast"), Some(100));
+        assert_eq!(picture(&Options::parse("contrast=dark\n"), "contrast"), Some(50));
+        let mut o = Options::parse("version=1
+");
+        for (key, v) in [("framegen", "off"), ("metal_detail", "high"), ("mouse_ud", "inverted"), ("brightness", "60"), ("contrast", "50")] {
+            write(&mut o, extra_key(key).unwrap(), v);
+        }
+        assert_eq!(o.to_text(), "version=1
+framegen=off
+metal_detail=high
+mouse_ud=inverted
+brightness=60
+");
+        write(&mut o, extra_key("mouse_ud").unwrap(), "like");
+        assert_eq!(o.extra("mouse_ud"), None, "Like camera removes the line");
     }
 
     #[test]

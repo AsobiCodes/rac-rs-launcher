@@ -40,6 +40,15 @@ pub fn too_old_message(windows: bool, version: &str) -> Option<String> {
         .then(|| format!("Version {version} cannot be installed on Linux: the Linux setup of RAC-RS starts with version {min}. Pick version {min} or newer."))
 }
 
+/// The oldest installable version of `game` on this system (R&C 1: the table above; the other games: their own `min_version`).
+pub fn min_for(windows: bool, game: &crate::games::GameDef) -> &'static str {
+    if game.id == "rac1" {
+        min_installable(windows)
+    } else {
+        game.min_version
+    }
+}
+
 /// One line of the version picker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installable {
@@ -56,12 +65,17 @@ pub fn installable(list: &[Release], show_test: bool) -> Vec<Installable> {
 
 /// `installable` for either system (tests check both on any host).
 pub fn installable_for(windows: bool, list: &[Release], show_test: bool) -> Vec<Installable> {
-    let min = min_installable(windows);
+    installable_for_game(windows, crate::games::game_by_id("rac1").unwrap_or(&crate::games::GAMES[0]), list, show_test)
+}
+
+/// `installable_for` for one game: its `<zip_prefix>-<ver>.zip`, its minimum version.
+pub fn installable_for_game(windows: bool, game: &crate::games::GameDef, list: &[Release], show_test: bool) -> Vec<Installable> {
+    let min = min_for(windows, game);
     let mut v: Vec<Installable> = list
         .iter()
         .filter(|r| !r.draft && (show_test || !r.prerelease))
         .filter(|r| crate::update::compare_version(&r.version(), min) != std::cmp::Ordering::Less)
-        .filter(|r| r.asset(&format!("rac-rs-{}.zip", r.version())).map(|a| releases::digest_hex(a).is_some()).unwrap_or(false))
+        .filter(|r| r.asset(&format!("{}-{}.zip", game.zip_prefix, r.version())).map(|a| releases::digest_hex(a).is_some()).unwrap_or(false))
         .map(|r| Installable { version: r.version(), date: r.date(), prerelease: r.prerelease, notes: r.notes() })
         .collect();
     v.sort_by(|a, b| crate::update::compare_version(&b.version, &a.version));
@@ -94,6 +108,9 @@ pub struct GameDl {
 
 impl GameDl {
     pub fn start(src: ReleaseSource, dest: PathBuf, want: Option<String>) -> GameDl {
+        Self::start_game(crate::games::game_by_id("rac1").unwrap_or(&crate::games::GAMES[0]), src, dest, want)
+    }
+    pub fn start_game(game: &'static crate::games::GameDef, src: ReleaseSource, dest: PathBuf, want: Option<String>) -> GameDl {
         let dl = GameDl {
             transfer: Transfer::new(),
             stage: Arc::new(AtomicU8::new(STAGE_LOOKUP)),
@@ -104,7 +121,7 @@ impl GameDl {
         };
         let (t, st, ver, res) = (dl.transfer.clone(), dl.stage.clone(), dl.version.clone(), dl.result.clone());
         std::thread::spawn(move || {
-            let r = run(&src, &dest, want.as_deref(), &t, &st, &ver);
+            let r = run_game(game, &src, &dest, want.as_deref(), &t, &st, &ver);
             if let Ok(mut g) = res.lock() {
                 *g = Some(r);
             }
@@ -121,21 +138,32 @@ impl GameDl {
 
 /// `rac-rs-<VER>.zip` of the release (the exact name first, then the only `rac-rs-*.zip` that is not the launcher).
 pub fn game_asset(r: &Release) -> Option<&Asset> {
-    let exact = format!("rac-rs-{}.zip", r.version());
-    r.asset(&exact).or_else(|| r.assets.iter().find(|a| a.name.starts_with("rac-rs-") && a.name.ends_with(".zip") && !a.name.contains("launcher")))
+    game_asset_for("rac-rs", r)
+}
+
+/// `<prefix>-<VER>.zip` of the release (R&C 2: prefix `rac-rs2`; the prefix always ends at the `-`, so `rac-rs-` never matches `rac-rs2-`).
+pub fn game_asset_for<'a>(prefix: &str, r: &'a Release) -> Option<&'a Asset> {
+    let exact = format!("{prefix}-{}.zip", r.version());
+    let start = format!("{prefix}-");
+    r.asset(&exact).or_else(|| r.assets.iter().find(|a| a.name.starts_with(&start) && a.name.ends_with(".zip") && !a.name.contains("launcher")))
 }
 
 /// Looks up the release, downloads the zip into `<dest>/.racl_download/`, unpacks it into `dest`, removes the zip. Returns the version.
 pub fn run(src: &ReleaseSource, dest: &Path, want: Option<&str>, t: &Transfer, stage: &AtomicU8, version: &Mutex<String>) -> Result<String, ReleaseError> {
+    run_game(crate::games::game_by_id("rac1").unwrap_or(&crate::games::GAMES[0]), src, dest, want, t, stage, version)
+}
+
+/// `run` for one game (its zip name; the Linux minimum applies to R&C 1 only).
+pub fn run_game(game: &crate::games::GameDef, src: &ReleaseSource, dest: &Path, want: Option<&str>, t: &Transfer, stage: &AtomicU8, version: &Mutex<String>) -> Result<String, ReleaseError> {
     stage.store(STAGE_LOOKUP, Ordering::Relaxed);
-    if let Some(m) = want.and_then(|v| too_old_message(cfg!(windows), v)) {
+    if let Some(m) = want.and_then(|v| if game.id == "rac1" { too_old_message(cfg!(windows), v) } else { None }) {
         return Err(ReleaseError::Bad(m));
     }
     let rel = match want {
         None => src.latest()?,
         Some(v) => src.list()?.into_iter().find(|r| !r.draft && r.version() == v).ok_or(ReleaseError::NotFound)?,
     };
-    let asset = game_asset(&rel).ok_or_else(|| ReleaseError::Bad("the release has no game zip".into()))?.clone();
+    let asset = game_asset_for(game.zip_prefix, &rel).ok_or_else(|| ReleaseError::Bad("the release has no game zip".into()))?.clone();
     if let Ok(mut g) = version.lock() {
         *g = rel.version();
     }
@@ -567,5 +595,24 @@ mod tests {
         assert!(set_exec_bits(&gone, Some(0o644), "data/x.bin").is_ok());
         assert!(set_exec_bits(&gone, None, "setup.sh").is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rac2_has_its_own_zip_name_and_minimum() {
+        let r2 = crate::games::game_by_id("rac2").unwrap();
+        let rel = |name: &str, tag: &str| -> Release {
+            let j = format!(r#"{{"tag_name":"{tag}","assets":[{{"name":"{name}","size":1,"browser_download_url":"x","digest":"sha256:{}"}}]}}"#, "a".repeat(64));
+            serde_json::from_str(&j).unwrap()
+        };
+        let r = rel("rac-rs2-0.1.0.zip", "v0.1.0");
+        assert_eq!(game_asset_for("rac-rs2", &r).map(|a| a.name.as_str()), Some("rac-rs2-0.1.0.zip"));
+        // the R&C 1 name rule never takes an R&C 2 zip and the other way round
+        assert!(game_asset_for("rac-rs", &r).is_none());
+        assert!(game_asset_for("rac-rs2", &rel("rac-rs-0.5.1.zip", "v0.5.1")).is_none());
+        for windows in [true, false] {
+            assert_eq!(installable_for_game(windows, r2, &[r.clone()], false).iter().map(|i| i.version.clone()).collect::<Vec<_>>(), vec!["0.1.0"]);
+            assert!(installable_for_game(windows, r2, &[rel("rac-rs-0.5.1.zip", "v0.5.1")], false).is_empty());
+        }
+        assert_eq!((min_for(true, r2), min_for(false, r2)), ("0.1.0", "0.1.0"));
     }
 }

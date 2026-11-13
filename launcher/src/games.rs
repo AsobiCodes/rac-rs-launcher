@@ -1,5 +1,5 @@
 //! The games table (one entry per game the launcher knows) and the install state of a game folder.
-//! Only R&C 1 is playable today; R&C 2 is announced ("coming soon"); R&C 3 is present but hidden (not announced).
+//! R&C 1 and R&C 2 (v0.1) are playable, each in its own install folder; R&C 3 is present but hidden (not announced).
 use std::path::{Path, PathBuf};
 
 /// A supported disc image (v1.00 of each region), values as in setup.ps1 `$Discs`.
@@ -26,12 +26,21 @@ pub struct GameDef {
     /// false = "Coming soon" (nothing to install yet).
     pub supported: bool,
     pub tagline: &'static str,
+    /// The GitHub repo whose releases hold the game zip ("" = none).
+    pub repo: (&'static str, &'static str),
+    /// The zip is `<zip_prefix>-<VER>.zip` with the top folder `<zip_prefix>-<VER>/`.
+    pub zip_prefix: &'static str,
+    /// The oldest version of this game the launcher installs (R&C 1 has its own, per system, in `game_dl`).
+    pub min_version: &'static str,
 }
 
 pub const RAC1_DISCS: [DiscDef; 2] = [
     DiscDef { serial: "SCES-50916", region: "PAL / Europe", name: "PAL / Europe v1.00 (SCES-50916)", size: 4_213_997_568, sha1: "B0DFBD8EAC0D84F173B6FC25D8A02A5FF22C652F" },
     DiscDef { serial: "SCUS-97199", region: "USA", name: "USA v1.00 (SCUS-97199)", size: 4_214_095_872, sha1: "AEE9275384F739C9B24CD5DE6F7E200292DB7B01" },
 ];
+
+/// R&C 2 PAL v1.00 (the only region R&C 2 v0.1 supports; the USA disc comes later).
+pub const RAC2_DISCS: [DiscDef; 1] = [DiscDef { serial: "SCES-51607", region: "PAL / Europe", name: "PAL / Europe v1.00 (SCES-51607)", size: 3_548_545_024, sha1: "5A64211823E62FAF33C0E86F1AD4DF962A028ED0" }];
 
 pub const GAMES: &[GameDef] = &[
     GameDef {
@@ -45,18 +54,24 @@ pub const GAMES: &[GameDef] = &[
         visible: true,
         supported: true,
         tagline: "The 2002 original, running the retail game code from your own disc.",
+        repo: crate::releases::GAME_REPO,
+        zip_prefix: "rac-rs",
+        min_version: crate::game_dl::MIN_INSTALLABLE,
     },
     GameDef {
         id: "rac2",
         title: "Ratchet & Clank 2",
         short: "R&C 2",
-        discs: &[],
-        exe: "rac2/build/release/rac-rs-2.exe",
-        options: "rac2/player/pc_options.txt",
-        mods: "rac2/mods",
+        discs: &RAC2_DISCS,
+        exe: "build/release/rac2-play.exe",
+        options: "player/pc_options.txt",
+        mods: "mods",
         visible: true,
-        supported: false,
-        tagline: "Coming soon.",
+        supported: true,
+        tagline: "The 2003 sequel, running the retail game code from your own disc.",
+        repo: crate::releases::RAC2_REPO,
+        zip_prefix: "rac-rs2",
+        min_version: "0.1.0",
     },
     GameDef {
         id: "rac3",
@@ -69,6 +84,9 @@ pub const GAMES: &[GameDef] = &[
         visible: false,
         supported: false,
         tagline: "",
+        repo: ("", ""),
+        zip_prefix: "rac-rs3",
+        min_version: "0.1.0",
     },
 ];
 
@@ -243,7 +261,9 @@ mod tests {
         let v: Vec<_> = visible_games().map(|g| g.id).collect();
         assert_eq!(v, vec!["rac1", "rac2"]);
         assert!(game_by_id("rac3").is_some());
-        assert!(!game_by_id("rac2").unwrap().supported);
+        assert!(game_by_id("rac2").unwrap().supported && !game_by_id("rac3").unwrap().supported);
+        let d = game_by_id("rac2").unwrap().disc_by_size(3_548_545_024).unwrap();
+        assert_eq!((d.serial, d.sha1.len()), ("SCES-51607", 40));
         assert_eq!(RAC1_DISCS[0].sha1.len(), 40);
         assert_eq!(game_by_id("rac1").unwrap().disc_by_size(4_214_095_872).unwrap().serial, "SCUS-97199");
     }
@@ -333,14 +353,16 @@ mod tests {
         assert_eq!(g.options_path(r), r.join("player").join("pc_options.txt"));
         assert_eq!(g.mods_dir(r), r.join("mods"));
         let g2 = game_by_id("rac2").unwrap();
-        assert_eq!(g2.mods_dir(r), r.join("rac2").join("mods"));
-        assert_eq!(g2.mods_rel(), Path::new("rac2").join("mods"));
+        // R&C 2 is its own install folder, laid out like R&C 1's, with its own exe
+        assert_eq!(g2.exe_path(r), r.join("build").join("release").join(if cfg!(windows) { "rac2-play.exe" } else { "rac2-play" }));
+        assert_eq!(g2.options_path(r), r.join("player").join("pc_options.txt"));
+        assert_eq!(g2.mods_dir(r), r.join("mods"));
         // the table never holds a backslash
         for g in GAMES {
             assert!(!g.exe.contains('\\') && !g.options.contains('\\') && !g.mods.contains('\\'), "{}", g.id);
         }
-        assert_eq!(exe_name_for(true, "rac2/build/release/rac-rs-2.exe"), "rac2/build/release/rac-rs-2.exe");
-        assert_eq!(exe_name_for(false, "rac2/build/release/rac-rs-2.exe"), "rac2/build/release/rac-rs-2");
+        assert_eq!(exe_name_for(true, "build/release/rac2-play.exe"), "build/release/rac2-play.exe");
+        assert_eq!(exe_name_for(false, "build/release/rac2-play.exe"), "build/release/rac2-play");
     }
 
     #[test]
@@ -356,6 +378,23 @@ mod tests {
         assert!(!is_installed(&d, g));
         std::fs::write(d.join(PLAY_SCRIPT), b"x").unwrap();
         assert!(is_installed(&d, g));
+    }
+
+    #[test]
+    fn an_rac2_folder_is_installed_by_its_own_exe() {
+        let d = scratch("rac2inst");
+        let (g1, g2) = (game_by_id("rac1").unwrap(), game_by_id("rac2").unwrap());
+        std::fs::create_dir_all(d.join("build/release")).unwrap();
+        std::fs::create_dir_all(d.join("generated")).unwrap();
+        std::fs::write(g2.exe_path(&d), b"x").unwrap();
+        std::fs::write(d.join(PLAY_SCRIPT), b"x").unwrap();
+        std::fs::write(d.join("generated/play.cfg"), "iso=x
+").unwrap();
+        assert!(is_installed(&d, g2) && !is_installed(&d, g1), "each game finds only its own exe");
+        std::fs::write(d.join("VERSION"), "0.1.0
+").unwrap();
+        std::fs::write(d.join(crate::library::SETUP_SCRIPT), b"x").unwrap();
+        assert_eq!(crate::library::check_folder(&d).unwrap().game, "rac2");
     }
 
     #[test]

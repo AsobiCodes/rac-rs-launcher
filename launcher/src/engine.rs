@@ -28,6 +28,8 @@ pub struct EngineOpts {
     pub test_update_base: Option<String>,
     /// Linux only (ignored on Windows): `--system-toolchain`, use the system's Rust, Python and C compiler instead of the pinned ones.
     pub system_toolchain: bool,
+    /// Another install whose `toolchain` folder this setup may reuse (`-ToolchainFrom` / `--toolchain-from`); the caller checked that the script knows the switch.
+    pub toolchain_from: Option<PathBuf>,
     /// More switches for flow tests (`-CheckOnly`, `-NoBuild`); also from the environment variable RAC_LAUNCHER_SETUP_ARGS.
     pub extra: Vec<String>,
 }
@@ -65,6 +67,10 @@ fn build_args_windows(o: &EngineOpts) -> Vec<String> {
         }
     }
     a.push("-NoShortcut".into());
+    if let Some(f) = &o.toolchain_from {
+        a.push("-ToolchainFrom".into());
+        a.push(f.to_string_lossy().to_string());
+    }
     if o.regenerate {
         a.push("-Regenerate".into());
     }
@@ -89,6 +95,10 @@ fn build_args_unix(o: &EngineOpts) -> Vec<String> {
             let t = b.trim_end_matches('/');
             a.push(if t.is_empty() { b.clone() } else { t.to_string() });
         }
+    }
+    if let Some(f) = &o.toolchain_from {
+        a.push("--toolchain-from".into());
+        a.push(f.to_string_lossy().to_string());
     }
     if o.regenerate {
         a.push("--regenerate".into());
@@ -248,6 +258,25 @@ mod tests {
 
     fn unix_opts() -> EngineOpts {
         EngineOpts { root: PathBuf::from("/home/p/Games/rac-rs"), iso: PathBuf::from("/home/p/iso/Ratchet & Clank.iso"), ..Default::default() }
+    }
+
+    #[test]
+    fn the_toolchain_source_is_passed_with_the_switch_of_each_system() {
+        let mut o = opts();
+        o.toolchain_from = Some(PathBuf::from(r"D:\g\Ratchet & Clank"));
+        let w = build_args_for(true, &o);
+        let i = w.iter().position(|s| s == "-ToolchainFrom").expect("switch");
+        assert_eq!(w[i + 1], r"D:\g\Ratchet & Clank");
+        assert!(!w.iter().any(|s| s == "--toolchain-from"));
+        let mut u = unix_opts();
+        u.toolchain_from = Some(PathBuf::from("/home/p/Games/Ratchet & Clank"));
+        let l = build_args_for(false, &u);
+        let j = l.iter().position(|s| s == "--toolchain-from").expect("switch");
+        assert_eq!(l[j + 1], "/home/p/Games/Ratchet & Clank");
+        assert!(!l.iter().any(|s| s == "-ToolchainFrom"));
+        // without a source neither system gets the switch
+        assert!(!build_args_for(true, &opts()).iter().any(|s| s.to_lowercase().contains("toolchainfrom")));
+        assert!(!build_args_for(false, &unix_opts()).iter().any(|s| s.contains("toolchain-from")));
     }
 
     #[test]

@@ -23,7 +23,7 @@ fn look(e: &LibEntry) -> EntryView {
 impl App {
     pub fn show_library(&mut self, ui: &mut Ui) {
         ui.label(theme::bold("Library", 26.0));
-        ui.label(theme::muted("Your Ratchet & Clank installs. You can keep several, for example the Europe and the USA version. Removing one from the list never deletes its files."));
+        ui.label(theme::muted("Your Ratchet & Clank installs (R&C 1 and R&C 2). You can keep several, for example the Europe and the USA version. Removing one from the list never deletes its files."));
         ui.add_space(10.0);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             self.download_card(ui);
@@ -79,7 +79,7 @@ impl App {
             });
             ui.label(theme::muted(e.folder.clone()));
             ui.label(theme::muted(format!("Added {}", e.added)));
-            ui.label(theme::muted(crate::play::SAVES_HINT));
+            ui.label(theme::muted(crate::play::saves_hint(g.id)));
             ui.add_space(4.0);
             if self.lib_ui.confirm_delete.as_deref() == Some(e.id.as_str()) {
                 let msg = format!("Delete this backup? Its folder goes to the {}, with the saves that are in it. Your main install is not touched.", crate::platform::bin_name());
@@ -146,7 +146,7 @@ impl App {
                     self.lib_ui.message = None;
                 }
                 if theme::button(ui, "New install...") {
-                    self.lib_ui.dialog = Some(AddDialog::New { text: library::default_install_folder().to_string_lossy().to_string() });
+                    self.lib_ui.dialog = Some(AddDialog::New { text: library::default_install_folder_game(self.new_game_def()).to_string_lossy().to_string() });
                     self.lib_ui.message = None;
                 }
             });
@@ -197,7 +197,7 @@ impl App {
             match library::check_folder(&path) {
                 Ok(f) => {
                     ok = true;
-                    ui.label(RichText::new(format!("Found Ratchet & Clank, version {}. Ready to add.", f.version)).color(theme::GREEN).size(14.5));
+                    ui.label(RichText::new(format!("Found {}, version {}. Ready to add.", games::game_by_id(f.game).map(|g| g.title).unwrap_or("Ratchet & Clank"), f.version)).color(theme::GREEN).size(14.5));
                 }
                 Err(m) => {
                     ui.label(RichText::new(m).color(theme::RED).size(14.0));
@@ -221,10 +221,29 @@ impl App {
         });
     }
 
-    fn new_install_form(&mut self, ui: &mut Ui, text: String) {
+    fn new_install_form(&mut self, ui: &mut Ui, mut text: String) {
         ui.add_space(6.0);
         ui.separator();
         ui.label(theme::bold("New install", 15.5));
+        let mut chosen: Option<&'static str> = None;
+        ui.horizontal(|ui| {
+            ui.label(theme::muted("Game"));
+            for g in crate::games::visible_games().filter(|g| g.supported) {
+                if ui.selectable_label(self.net.new_game == g.id, g.title).clicked() {
+                    chosen = Some(g.id);
+                }
+            }
+        });
+        if let Some(c) = chosen.filter(|c| *c != self.net.new_game) {
+            // the suggested folder follows the game; a folder the user typed or picked stays
+            let was_default = std::path::PathBuf::from(text.trim()) == library::default_install_folder_game(self.new_game_def());
+            self.set_new_game(c);
+            if was_default {
+                text = library::default_install_folder_game(self.new_game_def()).to_string_lossy().to_string();
+                self.lib_ui.dialog = Some(AddDialog::New { text: text.clone() });
+            }
+            self.lib_ui.message = None;
+        }
         ui.label(theme::muted(&format!("Where should the game live? It needs about {} GB. You can change the folder.", library::NEEDED_GB)));
         if let Some(t) = self.folder_field(ui, &text, "Folder for the game", Purpose::NewInstall) {
             self.lib_ui.dialog = Some(AddDialog::New { text: t });

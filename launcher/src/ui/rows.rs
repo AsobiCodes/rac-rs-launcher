@@ -373,6 +373,9 @@ pub fn percent(o: &Options, key: &str) -> Option<u32> {
     if key == extra::HUDSCALE {
         return extra::hudscale(o);
     }
+    if extra::is_picture(key) {
+        return extra::picture(o, key);
+    }
     o.get(key).and_then(|v| v.parse().ok())
 }
 
@@ -380,6 +383,9 @@ pub fn percent(o: &Options, key: &str) -> Option<u32> {
 pub fn set_percent(o: &mut Options, key: &str, pct: Option<u32>) {
     if key == extra::HUDSCALE {
         return extra::set_hudscale(o, pct);
+    }
+    if extra::is_picture(key) {
+        return extra::set_picture(o, key, pct);
     }
     o.set(key, pct.map(|p| p.to_string()).as_deref());
 }

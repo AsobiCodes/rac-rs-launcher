@@ -231,7 +231,8 @@ impl App {
     /// Used by `--root` and by the tests; the folder is put in the library whatever it holds.
     pub fn new(root: PathBuf, update_base: Option<String>) -> App {
         let mut library = Library::load(&root);
-        let entry = library.add(games::game_by_id("rac1").unwrap_or(&games::GAMES[0]), &root);
+        let game = library::check_folder(&root).ok().and_then(|f| games::game_by_id(f.game)).or_else(|| library::tree_game(&root).and_then(games::game_by_id)).unwrap_or_else(|| games::game_by_id("rac1").unwrap_or(&games::GAMES[0]));
+        let entry = library.add(game, &root);
         let _ = library.save();
         let mut app = Self::with_library(root, library, Some(entry.id), update_base);
         app.forced_root = true;
@@ -242,7 +243,8 @@ impl App {
     pub fn with_library(data_dir: PathBuf, library: Library, select: Option<String>, update_base: Option<String>) -> App {
         let cfg = LauncherCfg::load(&data_dir);
         let want = select.or_else(|| Some(cfg.install.clone()).filter(|s| !s.is_empty())).filter(|id| library.get(id).is_some()).or_else(|| library.entries.first().map(|e| e.id.clone()));
-        let game = games::game_by_id(&cfg.game).filter(|g| g.visible).unwrap_or(&games::GAMES[0]);
+        // the page opens on the game of the install that opens (the last used game when the library is empty)
+        let game = want.as_deref().and_then(|id| library.get(id)).and_then(|e| games::game_by_id(&e.game)).or_else(|| games::game_by_id(&cfg.game).filter(|g| g.visible)).unwrap_or(&games::GAMES[0]);
         let mut app = App {
             sel: if want.is_some() { Sel::Game(game.id) } else { Sel::Library },
             tab: Tab::from_id(&cfg.tab),
@@ -321,8 +323,26 @@ impl App {
         }
     }
 
+    /// The game of the open install (R&C 1 or R&C 2; R&C 1 when nothing is open). The name is from the time there was only R&C 1.
     pub fn rac1(&self) -> &'static GameDef {
-        games::game_by_id("rac1").unwrap_or(&games::GAMES[0])
+        self.cur_id.as_deref().and_then(|id| self.library.get(id)).and_then(|e| games::game_by_id(&e.game)).unwrap_or_else(|| games::game_by_id("rac1").unwrap_or(&games::GAMES[0]))
+    }
+
+    /// The open install is an R&C 2 one: R&C 2's own key table, no game updates from the R&C 1 release feed, no mods or achievements tab yet.
+    pub fn is_rac2(&self) -> bool {
+        self.rac1().id == "rac2"
+    }
+
+    /// The version the Settings page asks the option-gating table about: R&C 1 installs use their version; R&C 2 is not in the R&C 1
+    /// version table (its keys are in `pcopts_rc2`), so nothing is greyed.
+    pub fn gate_version(&self) -> String {
+        if self.is_rac2() { "99.0.0".to_string() } else { self.info.local_version.clone() }
+    }
+
+    /// Another install of the library whose toolchain the setup of the open install may reuse (`toolchain_reuse.rs`; None = download it as before).
+    pub fn toolchain_source(&self) -> Option<std::path::PathBuf> {
+        let others: Vec<std::path::PathBuf> = self.library.entries.iter().filter(|e| Some(e.id.as_str()) != self.cur_id.as_deref()).map(|e| e.path()).collect();
+        crate::toolchain_reuse::pick_source(cfg!(windows), &self.root, &others)
     }
 
     pub fn has_install(&self) -> bool {
@@ -389,7 +409,7 @@ impl App {
         if let Ok(mut g) = self.update.lock() {
             *g = UpdateState::Checking;
         }
-        update::check_async(self.info.local_version.clone(), self.info.built_version.clone(), self.update_base.clone(), self.root.clone(), self.update.clone());
+        update::check_async(self.rac1(), self.info.local_version.clone(), self.info.built_version.clone(), self.update_base.clone(), self.root.clone(), self.update.clone());
     }
 
     pub fn update_state(&self) -> UpdateState {
@@ -460,7 +480,7 @@ impl App {
             _ => platform::known_folder(platform::Known::Documents),
         };
         let ask = match purpose {
-            Purpose::Iso => Ask::file("Pick your Ratchet & Clank (Europe or USA, v1.00) disc image", &[("Disc image (*.iso)", &["iso"]), ("All files", &["*"])], start_dir),
+            Purpose::Iso => Ask::file(&format!("Pick your {} disc image ({}, v1.00)", self.rac1().title, self.rac1().discs.iter().map(|d| d.region).collect::<Vec<_>>().join(" or ")), &[("Disc image (*.iso)", &["iso"]), ("All files", &["*"])], start_dir),
             Purpose::ModZip => Ask::file("Pick a mod or texture pack (.zip)", &[("Zip file (*.zip)", &["zip"])], start_dir),
             Purpose::ModFolder => Ask::folder("Pick the folder of a mod or texture pack", start_dir),
             Purpose::AddInstall => Ask::folder(&format!("Pick the folder of your RAC-RS game (it holds VERSION and {})", library::SETUP_SCRIPT), start_dir),
@@ -520,7 +540,7 @@ impl App {
             self.fail_before_start(m, false);
             return;
         }
-        let opts = EngineOpts { root: self.root.clone(), iso, update: None, regenerate: repair, test_update_base: None, system_toolchain: self.cfg.use_system_toolchain, extra: engine::env_extra_args() };
+        let opts = EngineOpts { root: self.root.clone(), iso, update: None, regenerate: repair, test_update_base: None, system_toolchain: self.cfg.use_system_toolchain, toolchain_from: self.toolchain_source(), extra: engine::env_extra_args() };
         self.start_engine(opts);
     }
 
@@ -547,7 +567,7 @@ impl App {
             Some("A backup is never updated. Open your main install to update.".to_string())
         } else {
             // Linux: a version from before the Linux setup, or an install whose setup.sh predates the launcher's protocol, cannot be updated
-            crate::game_dl::too_old_message(cfg!(windows), to).or_else(|| crate::games::contract_problem(cfg!(windows), &self.root)).or_else(|| self.update_blocker())
+            (if self.is_rac2() { None } else { crate::game_dl::too_old_message(cfg!(windows), to) }).or_else(|| crate::games::contract_problem(cfg!(windows), &self.root)).or_else(|| self.update_blocker())
         };
         if let Some(m) = msg {
             self.fail_before_start(m, true);
@@ -561,6 +581,7 @@ impl App {
             regenerate: false,
             test_update_base: self.update_base.clone(),
             system_toolchain: self.cfg.use_system_toolchain,
+            toolchain_from: self.toolchain_source(),
             extra: engine::env_extra_args(),
         };
         self.start_engine(opts);

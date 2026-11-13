@@ -216,7 +216,7 @@ impl App {
             ui.label(theme::muted(format!("Game version: {}", if self.info.local_version.is_empty() { "-" } else { &self.info.local_version })));
             ui.label(theme::muted(format!("Launcher version: {LAUNCHER_VERSION}")));
             ui.label(theme::muted(format!("Library file: {}", self.library.file.display())));
-            ui.label(theme::muted(crate::play::SAVES_HINT));
+            ui.label(theme::muted(crate::play::saves_hint(self.rac1().id)));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if theme::button(ui, "Open game folder") {

@@ -13,6 +13,9 @@ impl App {
         let g = self.rac1();
         let installed = self.info.installed;
         let tabs_visible = installed && matches!(self.view, View::Home | View::Done);
+        if g.id == "rac2" && matches!(self.tab, Tab::Mods | Tab::Achievements) {
+            self.tab = Tab::Play;
+        }
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(theme::bold(g.title, 26.0));
@@ -20,9 +23,11 @@ impl App {
             });
             if tabs_visible {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                    let tabs = [Tab::Play, Tab::Settings, Tab::Mods, Tab::Achievements];
+                    // R&C 2 (v0.1): no mods and no achievements sync yet (both come in v0.2): their tabs are shown greyed out, not clickable
+                    let (tabs, names): (&[Tab], &[&str]) = (&[Tab::Play, Tab::Settings, Tab::Mods, Tab::Achievements], &["Play", "Settings", "Mods", "Achievements"]);
+                    let locked: &[bool] = if g.id == "rac2" { &[false, false, true, true] } else { &[] };
                     let cur = tabs.iter().position(|t| *t == self.tab);
-                    if let Some(i) = theme::segmented(ui, "tabs", "Page", &["Play", "Settings", "Mods", "Achievements"], cur) {
+                    if let Some(i) = theme::segmented_gated(ui, "tabs", "Page", names, cur, locked) {
                         let t = tabs[i];
                         if t != self.tab {
                             self.tab = t;
@@ -170,7 +175,9 @@ impl App {
             }
             line(ui, "Disc", disc);
             line(ui, "Lighting", lighting.to_string());
-            line(ui, "Mods", if total == 0 { "none installed".to_string() } else { format!("{on} of {total} turned on") });
+            if !self.is_rac2() {
+                line(ui, "Mods", if total == 0 { "none installed".to_string() } else { format!("{on} of {total} turned on") });
+            }
         });
     }
 
@@ -191,7 +198,7 @@ impl App {
             }
             ui.hyperlink_to("Report a problem", crate::play::ISSUES_URL);
         });
-        ui.label(theme::muted(crate::play::SAVES_HINT));
+        ui.label(theme::muted(crate::play::saves_hint(self.rac1().id)));
         ui.label(theme::muted(crate::play::LOG_HINT));
     }
 
@@ -281,11 +288,12 @@ impl App {
         let repair = self.view == View::Repair;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             self.hero(ui, g, |this, ui| {
-                ui.label(theme::bold(if repair { "Repair / rebuild" } else { "Set up Ratchet & Clank" }, 22.0));
+                let (title, which) = (g.title, disc_words(g));
+                ui.label(theme::bold(if repair { "Repair / rebuild".to_string() } else { format!("Set up {title}") }, 22.0));
                 let intro = if repair {
-                    "This makes the game code again from your disc and rebuilds the game (about 15 minutes). Pick the .iso image of your Ratchet & Clank disc (PAL / Europe or USA, v1.00)."
+                    format!("This makes the game code again from your disc and rebuilds the game (about 15 minutes). Pick the .iso image of your {title} disc ({which}).")
                 } else {
-                    "Pick the .iso image of your own Ratchet & Clank disc (PAL / Europe or USA, v1.00). The game is built from it on this PC."
+                    format!("Pick the .iso image of your own {title} disc ({which}). The game is built from it on this PC.")
                 };
                 ui.label(RichText::new(intro).color(theme::TEXT).size(14.5));
                 this.disc_picker(ui);
@@ -330,7 +338,7 @@ impl App {
                 ui.label(theme::muted(format!("Checking the disc image ... {p}%")));
             }
             DiscState::Ok(d) => {
-                ui.label(RichText::new(format!("Disc OK: Ratchet & Clank, {}.", d.name)).color(theme::GREEN).size(14.5));
+                ui.label(RichText::new(format!("Disc OK: {}, {}.", self.rac1().title, d.name)).color(theme::GREEN).size(14.5));
             }
             DiscState::Bad(m) => {
                 ui.label(RichText::new(m).color(theme::RED).size(14.0));
@@ -341,8 +349,8 @@ impl App {
 
     pub fn run_title(&self) -> String {
         match &self.run_kind {
-            RunKind::Install => "Installing Ratchet & Clank".to_string(),
-            RunKind::Repair => "Repairing Ratchet & Clank".to_string(),
+            RunKind::Install => format!("Installing {}", self.rac1().title),
+            RunKind::Repair => format!("Repairing {}", self.rac1().title),
             RunKind::Update { to, finish } => {
                 if *finish {
                     format!("Finishing the update to v{to}")
@@ -352,4 +360,10 @@ impl App {
             }
         }
     }
+}
+
+/// "PAL / Europe or USA, v1.00" / "PAL / Europe, v1.00": the discs a game accepts, for the pick-your-disc text.
+fn disc_words(g: &GameDef) -> String {
+    let r: Vec<&str> = g.discs.iter().map(|d| d.region).collect();
+    format!("{}, v1.00", r.join(" or "))
 }

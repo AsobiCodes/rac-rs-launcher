@@ -186,7 +186,7 @@ impl Progress {
         let disk = ["no space left", "not enough space", "os error 112", "there is not enough space"].iter().any(|p| lall.contains(p));
         let mut m = format!("The step '{}' did not finish.", self.step_name());
         if self.step == 1 {
-            m = "The disc image was not accepted.\n\nIt must be Ratchet & Clank PAL / Europe v1.00 or USA v1.00 as one .iso file. Click Try again and pick the right file.".to_string();
+            m = "The disc image was not accepted.\n\nIt must be the disc of the game you are installing, as one .iso file: Ratchet & Clank (PAL / Europe or USA, v1.00) or Ratchet & Clank 2 (PAL / Europe, v1.00). Click Try again and pick the right file.".to_string();
         } else if disk {
             m += &format!("\n\nThere may not be enough free disk space (about {} GB are needed). Free some space and click Try again.", crate::library::NEEDED_GB);
         } else if let Some(h) = system_hint(&self.log, linux, net_text) {

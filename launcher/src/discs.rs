@@ -55,9 +55,28 @@ pub fn format_size(len: u64) -> String {
     }
 }
 
-fn wrong_size_message(len: u64) -> String {
+/// What `game` wants as a disc, in words: "Ratchet & Clank PAL / Europe v1.00 or USA v1.00".
+fn wanted_text(game: &GameDef) -> String {
+    let regions: Vec<String> = game.discs.iter().map(|d| format!("{} v1.00", d.region)).collect();
+    format!("{} {}", game.title, regions.join(" or "))
+}
+
+fn wrong_size_message(game: &GameDef, len: u64) -> String {
+    // the disc of the OTHER game: say which game it is and which one this install needs
+    if let Some(o) = crate::games::GAMES.iter().filter(|g| g.id != game.id && g.supported).find(|g| g.disc_by_size(len).is_some()) {
+        return format!(
+            "This is the disc image of {}, but this install is {}. Pick the {} disc image instead ({}, one .iso file of about {}).",
+            o.title,
+            game.title,
+            game.title,
+            wanted_text(game),
+            format_size(game.discs.first().map(|d| d.size).unwrap_or(0))
+        );
+    }
     format!(
-        "This is not the right disc image. It must be Ratchet & Clank PAL / Europe v1.00 or USA v1.00, one .iso file of about 3.9 GB. This file is {}. Other regions, other versions and Platinum / Greatest Hits re-releases do not work.",
+        "This is not the right disc image. It must be {}, one .iso file of about {}. This file is {}. Other regions, other versions and Platinum / Greatest Hits re-releases do not work.",
+        wanted_text(game),
+        format_size(game.discs.first().map(|d| d.size).unwrap_or(0)),
         format_size(len)
     )
 }
@@ -65,7 +84,7 @@ fn wrong_size_message(len: u64) -> String {
 /// Size only (fast): which disc this file looks like, or the message why not.
 pub fn quick_check(game: &GameDef, path: &Path) -> Result<&'static DiscDef, String> {
     let meta = std::fs::metadata(path).ok().filter(|m| m.is_file()).ok_or_else(|| "That file could not be found.".to_string())?;
-    game.disc_by_size(meta.len()).ok_or_else(|| wrong_size_message(meta.len()))
+    game.disc_by_size(meta.len()).ok_or_else(|| wrong_size_message(game, meta.len()))
 }
 
 fn run(game: &GameDef, c: &DiscCheck, verify_sha1: bool) -> DiscResult {
@@ -137,6 +156,30 @@ mod tests {
         let e = quick_check(g, &p).unwrap_err();
         assert!(e.contains("not the right disc image") && e.contains("4 KB"), "{e}");
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_disc_of_the_other_game_names_both_games() {
+        // sparse files with the exact sizes of the R&C 1 PAL and the R&C 2 PAL disc: only the size is looked at
+        let dir = std::env::temp_dir().join(format!("racl_discs_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |n: &str, len: u64| {
+            let p = dir.join(n);
+            std::fs::File::create(&p).unwrap().set_len(len).unwrap();
+            p
+        };
+        let (r1, r2) = (game_by_id("rac1").unwrap(), game_by_id("rac2").unwrap());
+        let (d1, d2) = (mk("r1.iso", crate::games::RAC1_DISCS[0].size), mk("r2.iso", crate::games::RAC2_DISCS[0].size));
+        let e = quick_check(r2, &d1).unwrap_err();
+        assert!(e.contains("disc image of Ratchet & Clank, but this install is Ratchet & Clank 2") && e.contains("SCES") == false && e.contains("3.3 GB"), "{e}");
+        let e = quick_check(r1, &d2).unwrap_err();
+        assert!(e.contains("disc image of Ratchet & Clank 2, but this install is Ratchet & Clank.") && e.contains("PAL / Europe v1.00 or USA v1.00"), "{e}");
+        assert_eq!(quick_check(r2, &d2).unwrap().serial, "SCES-51607");
+        assert_eq!(quick_check(r1, &d1).unwrap().serial, "SCES-50916");
+        // a file of any other size: the generic text of that game
+        let e = quick_check(r2, &mk("x.iso", 123456)).unwrap_err();
+        assert!(e.contains("It must be Ratchet & Clank 2 PAL / Europe v1.00") && !e.contains("USA"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

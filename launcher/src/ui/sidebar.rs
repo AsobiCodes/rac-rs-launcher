@@ -133,10 +133,13 @@ impl App {
             }
             let installs: Vec<LibEntry> = self.library.entries.iter().filter(|e| e.game == g.id).cloned().collect();
             if installs.is_empty() {
-                if nav_item(ui, false, g.title, "Not installed", Some(theme::MUTED)) {
-                    self.sel = Sel::Library;
+                if nav_item(ui, self.sel == Sel::Library && self.lib_ui.only_game == Some(g.id), g.title, "Not installed", Some(theme::MUTED)) {
+                    self.open_library_for(g.id);
                 }
                 ui.add_space(2.0);
+            } else if self.lib_ui.only_game == Some(g.id) {
+                // the game has an install now: the Library is whole again
+                self.lib_ui.only_game = None;
             }
             for e in &installs {
                 let current = self.cur_id.as_deref() == Some(e.id.as_str());
@@ -162,8 +165,9 @@ impl App {
                 self.sel = Sel::Launcher;
             }
             ui.add_space(2.0);
-            if nav_item(ui, self.sel == Sel::Library, "Library", &format!("{} install(s) - add or remove", self.library.entries.len()), None) {
+            if nav_item(ui, self.sel == Sel::Library && self.lib_ui.only_game.is_none(), "Library", &format!("{} install(s) - add or remove", self.library.entries.len()), None) {
                 self.sel = Sel::Library;
+                self.lib_ui.only_game = None;
             }
         });
     }

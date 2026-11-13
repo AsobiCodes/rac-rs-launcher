@@ -2,6 +2,8 @@
 //! page shows R&C 2's rows (none of R&C 1's lock-on / wrench rows, no preset selector), a click is written to its pc_options.txt, and
 //! PNGs of the pages go to RAC_LAUNCHER_SHOTS (default `..\shots_rc2`).
 use egui::vec2;
+#[allow(unused_imports)]
+use rac_rs_launcher::ui::state_lib::AddDialog;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use rac_rs_launcher::ui::state::{App, Sel, Tab};
@@ -111,5 +113,38 @@ fn rc2_install_page_and_new_install_form_shots() {
     h.run();
     std::thread::sleep(std::time::Duration::from_millis(500));
     shot(&mut h, "rc2_new_install.png");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A game without an install, clicked in the sidebar: the Library shows that game only (no card of the other game, no game choice in
+/// "New install"); the Library entry of the sidebar shows everything again.
+#[test]
+fn library_of_a_game_without_install_shows_only_that_game() {
+    let _gpu = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let root = rc2_install("only");
+    let mut h = harness(&root, Tab::Play, 760.0);
+    h.run();
+    assert!(h.state().app.library.entries.iter().all(|e| e.game == "rac2"), "the test install is R&C 2");
+    // the other game (R&C 1) has no install here: its sidebar line opens the Library for R&C 1 only
+    h.state_mut().app.net.game_src = rac_rs_launcher::releases::ReleaseSource::Folder(root.join("_none"));
+    h.state_mut().app.open_library_for("rac1");
+    h.run();
+    {
+        let a = &h.state().app;
+        assert_eq!(a.sel, Sel::Library);
+        assert_eq!(a.lib_ui.only_game, Some("rac1"));
+        assert_eq!(a.net.new_game, "rac1");
+        assert!(matches!(a.lib_ui.dialog, Some(AddDialog::New { .. })), "the New install form is open");
+    }
+    assert!(h.query_by_label("Remove from list").is_none(), "no install card of the other game");
+    assert!(h.query_by_label("Game").is_none(), "no game choice");
+    assert!(h.query_by_label("Download the game").is_some() || h.query_by_label("Use this folder").is_some());
+    shot(&mut h, "rc2_library_one_game.png");
+    // the whole Library again
+    h.state_mut().app.goto_library();
+    h.run();
+    assert_eq!(h.state().app.lib_ui.only_game, None);
+    assert!(h.query_by_label("Remove from list").is_some(), "the R&C 2 install card is back");
+    assert!(h.query_by_label("Game").is_some(), "the game choice is back");
     let _ = std::fs::remove_dir_all(&root);
 }

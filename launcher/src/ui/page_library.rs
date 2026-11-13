@@ -22,13 +22,23 @@ fn look(e: &LibEntry) -> EntryView {
 
 impl App {
     pub fn show_library(&mut self, ui: &mut Ui) {
-        ui.label(theme::bold("Library", 26.0));
-        ui.label(theme::muted("Your Ratchet & Clank installs (R&C 1 and R&C 2). You can keep several, for example the Europe and the USA version. Removing one from the list never deletes its files."));
+        // opened from a game of the sidebar that has no install: that game only
+        let only = self.lib_ui.only_game.and_then(|id| games::game_by_id(id));
+        match only {
+            Some(g) => {
+                ui.label(theme::bold(g.title, 26.0));
+                ui.label(theme::muted(&format!("{} is not installed yet. Make a new install below, or add a folder where you already set it up.", g.title)));
+            }
+            None => {
+                ui.label(theme::bold("Library", 26.0));
+                ui.label(theme::muted("Your Ratchet & Clank installs (R&C 1 and R&C 2). You can keep several, for example the Europe and the USA version. Removing one from the list never deletes its files."));
+            }
+        }
         ui.add_space(10.0);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             self.download_card(ui);
-            let entries = self.library.entries.clone();
-            if entries.is_empty() {
+            let entries: Vec<LibEntry> = self.library.entries.iter().filter(|e| only.is_none_or(|g| e.game == g.id)).cloned().collect();
+            if entries.is_empty() && only.is_none() {
                 theme::card_colored(ui, theme::BLUE, |ui| {
                     ui.set_width(ui.available_width());
                     ui.label(theme::bold("No game yet", 18.0));
@@ -146,6 +156,9 @@ impl App {
                     self.lib_ui.message = None;
                 }
                 if theme::button(ui, "New install...") {
+                    if let Some(id) = self.lib_ui.only_game {
+                        self.set_new_game(id);
+                    }
                     self.lib_ui.dialog = Some(AddDialog::New { text: library::default_install_folder_game(self.new_game_def()).to_string_lossy().to_string() });
                     self.lib_ui.message = None;
                 }
@@ -226,14 +239,20 @@ impl App {
         ui.separator();
         ui.label(theme::bold("New install", 15.5));
         let mut chosen: Option<&'static str> = None;
-        ui.horizontal(|ui| {
-            ui.label(theme::muted("Game"));
-            for g in crate::games::visible_games().filter(|g| g.supported) {
-                if ui.selectable_label(self.net.new_game == g.id, g.title).clicked() {
-                    chosen = Some(g.id);
-                }
+        match self.lib_ui.only_game {
+            // the Library of one game: no choice, the form is for that game
+            Some(id) => chosen = Some(id),
+            None => {
+                ui.horizontal(|ui| {
+                    ui.label(theme::muted("Game"));
+                    for g in crate::games::visible_games().filter(|g| g.supported) {
+                        if ui.selectable_label(self.net.new_game == g.id, g.title).clicked() {
+                            chosen = Some(g.id);
+                        }
+                    }
+                });
             }
-        });
+        }
         if let Some(c) = chosen.filter(|c| *c != self.net.new_game) {
             // the suggested folder follows the game; a folder the user typed or picked stays
             let was_default = std::path::PathBuf::from(text.trim()) == library::default_install_folder_game(self.new_game_def());
@@ -293,5 +312,15 @@ impl App {
     /// The button the sidebar uses for "add / manage".
     pub fn goto_library(&mut self) {
         self.sel = Sel::Library;
+        self.lib_ui.only_game = None;
+    }
+
+    /// A game of the sidebar that has no install yet: the Library shows only that game, with its "New install" form open.
+    pub fn open_library_for(&mut self, id: &'static str) {
+        self.sel = Sel::Library;
+        self.lib_ui.only_game = Some(id);
+        self.set_new_game(id);
+        self.lib_ui.dialog = Some(AddDialog::New { text: library::default_install_folder_game(self.new_game_def()).to_string_lossy().to_string() });
+        self.lib_ui.message = None;
     }
 }

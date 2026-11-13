@@ -52,6 +52,9 @@ pub struct LibUi {
     pub confirm_delete: Option<String>,
     /// The message under the dialog (error or note) after Add / Install was clicked.
     pub message: Option<(String, bool)>,
+    /// The Library was opened from a game of the sidebar that has no install yet: only that game's installs are listed and
+    /// "New install" is for that game (no game choice). None = the whole Library.
+    pub only_game: Option<&'static str>,
 }
 
 /// Text for a folder that is too full for a new install (None = fine or unknown).

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.8
+- Fix: clicking a game that is not installed yet (for example Ratchet & Clank 2) opened the whole Library: it listed the installs of the other game and "New install" offered the other game too. Now it opens a page for that game only, with "New install" ready for it. The Library entry at the bottom still shows all installs and the game choice.
+- Everything from v0.1.7 stays.
+
 ## v0.1.7
 - New: Ratchet & Clank 2 (RAC-RS 2). Library > New install now has a "Game" choice: Ratchet & Clank or Ratchet & Clank 2. R&C 2 downloads from its own project page, goes into its own folder (Ratchet & Clank 2), and is set up from your PAL / Europe disc (SCES-51607), the same way as R&C 1. Until R&C 2 is released the launcher says "Ratchet & Clank 2 has not been released yet" instead of an error.
 - R&C 2 installs get their own pages: Play and Settings; the Mods and Achievements tabs are shown greyed out (R&C 2 has neither yet). The Settings page lists only the options R&C 2 really has, with R&C 2's own defaults and help texts (no Buy all ammo switch: R&C 2's vendor always has it); Resolution, the Graphics Preset and the key bindings are set in the game. Automatic update checks work for R&C 2 the same way as for R&C 1, against R&C 2's own project page (never R&C 1's); an R&C 1 update is never offered to or applied on an R&C 2 folder, or the other way round. While R&C 2 has no release yet, the check says nothing.
